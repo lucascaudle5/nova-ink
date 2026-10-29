@@ -27,6 +27,16 @@ From the project folder containing package.json:
     npm run build:host-test
     npm run start
 
+Faster dev loop:
+
+    npm run typecheck                                       # tsc --noEmit, no tests
+    npm run typecheck:watch                                 # re-check on every save
+    npm run test:watch                                      # re-run tests/*.test.mjs on change
+    node --import tsx --test --test-force-exit tests/session.test.mjs    # run a single test file
+    node --import tsx --test --test-force-exit --test-name-pattern "conflict" tests/session.test.mjs   # filter by test name
+
+Keep `--test-force-exit` for single files: session.test.mjs (and others that start servers) does not exit on its own without it. It cannot be combined with `--watch`, so `test:watch` omits it. Each test file runs in its own process, and importing tldraw costs roughly 3 to 6 s per process, which is where most of the `npm test` time goes.
+
 Or run start-windows-test.cmd. The server listens at http://127.0.0.1:3001/mcp; `/health` reports the version. Keep the existing restricted tunnel and plugin. Refresh the plugin if ChatGPT shows a cached older UI.
 
 ### Data location and compatibility
