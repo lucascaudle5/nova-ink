@@ -141,7 +141,28 @@ Durable Object invocation, cpu ms / wall ms:
 
 Worker invocation for the `nova_ink_diagnostics` tool call itself (three calls): CPU 12, 48, 13 ms. These succeeded although the Workers Free page documents 10 ms CPU per HTTP request ("each isolate has some built-in flexibility"), so this is a risk to keep watching, not a pass. The Durable Objects limits page lists 30 s CPU per invocation without a free/paid split, while saying DOs have "the same per invocation CPU limits as any Workers do"; the numbers here do not settle that ambiguity.
 
-Not yet measured: the real widget path (`ink_open_canvas`, `ink_save_canvas` through the Worker, which adds JSON work on top of the DO), `s1500` CPU, and browser-side cost.
+Second capture (runs 6d260f51, 72e11e5d, then the real widget path and `nova_ink_diag_payload`), all outcome `ok`:
+
+| s1500 DO step (two runs) | cpu / wall ms |
+|---|---|
+| first full save | 47 / 336, 44 / 246 |
+| open | 20 / 39, 19 / 29 |
+| 1st edit (inline checkpoint) | 31 / 70, 31 / 63 |
+| steady-state edit | 2 / 38, 1 / 32 |
+| forced checkpoint | 44 / 81, 37 / 72 |
+
+Real Worker tool calls from the widget (CPU includes the Worker's own JSON work; this is the number that matters for the 10 ms free-plan figure):
+
+| Tool | cpu ms | wall ms | note |
+|---|---|---|---|
+| `ink_open_canvas` (s1500) | 23, 26 | 224, 380 | |
+| `ink_save_canvas` (s1500) | 58, 34, 30 | 342, 318, 227 | request body 1.90 MiB each (whole-snapshot save) |
+| `ink_heartbeat` | 3-13 | 19-54 | |
+| `nova_ink_diag_payload` (1, 4, 8, 12 MB responses) | 18, 40, 32, 81 | 29, 62, 268, 558 | response direction only; `receivedChars` was 0 |
+
+Every real widget call except heartbeat used more than 10 ms of Worker CPU, up to 58 ms, and none returned an error or `exceededCpu`. So 10 ms per request is not being enforced hard here, but Cloudflare says sustained overage gets terminated, so this stays a risk. Whole-snapshot saves also ship the entire canvas on every save (1.90 MiB at s1500), which is a v0.2-contract cost, not a Durable Object cost.
+
+Not yet measured: the largest save from the widget with images (check 3, request direction), refresh after 1 h and next day (check 2), and browser-side cost. Whether the widget showed "Saved" is the user's observation, not confirmed here.
 
 ### Results table (fill in)
 
