@@ -2,7 +2,7 @@
 
 **Snapshot:** October 29, 2026  
 **Packaged reference:** v0.2.1, user-tested on iPad
-**Current local working copy:** v0.2.3 (branch v0.2.3-reliability); not repackaged or published; iPad acceptance pending (IPAD_ACCEPTANCE.md)
+**Current local working copy:** v0.2.3 (branch v0.2.3-reliability); not repackaged or published; iPad acceptance is pending but is not a development gate; the user tests in occasional batches (IPAD_ACCEPTANCE.md)
 
 ## Mission
 A ChatGPT-integrated engineering notebook for actual coursework. Preserve productive independent problem-solving while allowing student-initiated contextual tutoring.
@@ -58,7 +58,7 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 - Backups are on the host machine; no tested off-machine recovery.
 - Single-process JSON prototype with 12 MiB per-canvas limit; separate server processes do not coordinate leases.
 - AI annotation mode is not implemented.
-- Top toolbar and backup UI need iPad acceptance.
+- Top toolbar and backup UI have not been verified on iPad (they await a user test batch).
 - No guaranteed iPad side-by-side interaction.
 - Tldraw licensing is required before production.
 - Secrets, private tunnel identity, and actual notebook data stay outside Git.
@@ -70,11 +70,11 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 - The package folder's Git repository uses the user's personal author identity; the v0.2.1 source baseline was the first commit. The NOVA ARCHAELOGY chat workspace remains separate from the code package.
 
 ## Next steps
-1. Run IPAD_ACCEPTANCE.md on a physical iPad (includes two-client handoff and backup restore). With the user and disposable test canvases:
+1. iPad acceptance is not a gate for development. The user runs IPAD_ACCEPTANCE.md (full checklist, plus the quick check after changes) on a physical iPad in occasional batches; it includes two-client handoff and backup restore. Report results by source: verified on iPad (user-reported), automated tests only, or desktop ChatGPT only. Items for those batches, with the user and disposable test canvases:
    - Verify lease handoff between two independent clients and that an expired editor cannot save.
    - Restore an earlier valid backup through Host tools → Backups and confirm a new revision.
    - Verify toolbar, Pencil, finger pan/zoom, persistence, and canvas switching on iPad.
    - Do not intentionally corrupt real data.
-2. Next priority after iPad acceptance, ahead of v0.3 notebooks: PDF page import. PDF pages become separate movable pages with source provenance (document, page number), and page-associated annotations travel with their pages. Provide lock and detach controls. Plan it first; storage changes stay backward compatible.
-3. v0.3 (incremental, backward compatible): notebooks grouping canvases, rename, soft-delete trash, metadata search, explicit schema versioning with opt-in migration.
+2. Next development priority, proceeding without waiting for iPad acceptance and ahead of v0.3 notebooks: PDF page import. PDF pages become separate movable pages with source provenance (document, page number), and page-associated annotations travel with their pages. Provide lock and detach controls. Plan it first; storage changes stay backward compatible.
+3. v0.3 (also proceeds without waiting for iPad acceptance; incremental, backward compatible): notebooks grouping canvases, rename, soft-delete trash, metadata search, explicit schema versioning with opt-in migration.
 4. Do not publish or redeploy without explicit authorization.

@@ -16,7 +16,7 @@ Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw a
 - Do not silently alter saved snapshots, IDs, revisions, camera state, or data location.
 - Show Saved only after durable server acknowledgement. On failure, show Not synced and preserve recoverable state.
 - Preserve one active editor lease per canvas and revision conflict protection.
-- Preserve tldraw's native Pencil/touch behavior. Top toolbar is implemented but needs iPad acceptance.
+- Preserve tldraw's native Pencil/touch behavior. Top toolbar is implemented; iPad behavior is only verified when the user reports it.
 - Do not use undocumented host metadata to force an iPad side pane.
 - The user initiates every AI hint. Chat hints do not mutate the canvas; AI annotations need separate explicit selection and attribution.
 - Distinguish independent student work from AI-assisted edits. Separate user reports, verified behavior, plans, and assumptions.
@@ -35,6 +35,10 @@ Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw a
 
 ## Status
 Current status, verification, and next work live only in CODEX_HANDOFF.md; do not copy them here.
+
+## iPad testing is not a development gate
+- Development, including PDF page import and v0.3 work, proceeds without waiting for iPad acceptance. The user tests on iPad in occasional batches using IPAD_ACCEPTANCE.md.
+- Always report honestly which behavior is verified on iPad (user-reported), which only by automated tests, and which only by desktop ChatGPT. Never imply iPad verification that did not happen.
 
 ## Testing and compatibility rules
 - Tests must use temporary directories (see tests/helpers). Session tests run the real MCP server in-memory via tests/helpers/harness.mjs. Prefer behavioral tests over source-regex tests.
