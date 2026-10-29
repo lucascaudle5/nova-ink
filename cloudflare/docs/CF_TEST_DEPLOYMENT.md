@@ -162,6 +162,17 @@ Real Worker tool calls from the widget (CPU includes the Worker's own JSON work;
 
 Every real widget call except heartbeat used more than 10 ms of Worker CPU, up to 58 ms, and none returned an error or `exceededCpu`. So 10 ms per request is not being enforced hard here, but Cloudflare says sustained overage gets terminated, so this stays a risk. Whole-snapshot saves also ship the entire canvas on every save (1.90 MiB at s1500), which is a v0.2-contract cost, not a Durable Object cost.
 
+Check 3, large saves through ChatGPT (materialized `img3mb` / `img8mb` canvases, one shape moved, all outcome `ok`, user saw no failure):
+
+| Canvas | Tool | cpu ms | wall ms | request body |
+|---|---|---|---|---|
+| img3mb | `ink_open_canvas` | 37, 63 | 391, 733 | |
+| img3mb | `ink_save_canvas` | 98, 76 | 480, 773 | 3.83 MiB |
+| img8mb | `ink_open_canvas` | 109, 133 | 535, 630 | |
+| img8mb | `ink_save_canvas` | 192, 317, 278 | 973, 1532, 1119 | 10.19 MiB |
+
+The generated "images" are random bytes, not decodable PNGs, so the widget draws a broken-image icon; that is the test data, not a bug. Dropping real images into the widget fails with tldraw's "Upload failed" toast for every file under the widget's own 8 MiB cap (`MAX_ASSET_BYTES` in `src/main.tsx`, files over it get a "max 8 MiB" message); no request reached the Worker. Cause not established (possible ChatGPT-sandbox / CSP issue); not tested on the Windows server connector. Largest save that went through: 10.19 MiB. The Worker's own body cap is 16 MiB; the ChatGPT-side ceiling above 10.19 MiB is unknown.
+
 Not yet measured: the largest save from the widget with images (check 3, request direction), refresh after 1 h and next day (check 2), and browser-side cost. The user confirmed the widget showed "Saved" after the s1500 edit. For check 3 images, `node scripts/make-test-images.mjs` writes incompressible noise PNGs (3, 6, 9, 11 MiB) to `%TEMP%\nova-test-images`.
 
 ### Results table (fill in)
