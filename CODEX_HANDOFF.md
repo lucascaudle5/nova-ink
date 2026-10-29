@@ -78,3 +78,60 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 2. Next development priority, proceeding without waiting for iPad acceptance and ahead of v0.3 notebooks: PDF page import. PDF pages become separate movable pages with source provenance (document, page number), and page-associated annotations travel with their pages. Provide lock and detach controls. Plan it first; storage changes stay backward compatible.
 3. v0.3 (also proceeds without waiting for iPad acceptance; incremental, backward compatible): notebooks grouping canvases, rename, soft-delete trash, metadata search, explicit schema versioning with opt-in migration.
 4. Do not publish or redeploy without explicit authorization.
+
+## Long-term roadmap (accepted October 29, 2026)
+The user is an aerospace engineering student (current courses: Dynamics, Mechanics of Materials) and intends to use and personally extend NOVA Ink for years. Every item below is accepted; the order is a recommendation, not a commitment. Plan each item before building it, keep storage backward compatible, and follow the accepted product decisions above (student-initiated help, no unsolicited hints, AI marks distinguished from student work).
+
+### Recommended order
+1. PDF page import (Next steps, item 2).
+2. Export pages to PDF for submission.
+3. Engineering tool plug-in pattern: each tool is a self-contained module behind one small interface, so new tools can be added each semester. First tool: units checker.
+4. Shear and moment diagram checker, and Mohr's circle (highest value for current courses).
+5. Hint ladder and "check this step", then "redo later".
+6. Remaining items below.
+
+### Long-term foundations
+- Check tldraw's license terms for long-term personal, non-commercial use before investing further; it is the hardest dependency to replace.
+- Data ownership: documented storage formats, PDF export, and tested off-machine backups so notes outlive any app, host, or AI provider.
+- Host independence: standalone browser mode alongside the ChatGPT MCP App, and AI requests behind one replaceable adapter.
+- Maintainability: the user is the long-term maintainer. Explain changes, keep tests next to features, and keep the code readable.
+
+### Coursework in and out
+- PDF page import (problem sets, lecture slides) and export to PDF.
+- Engineering page templates: graph paper, engineering grid, free-body diagram and circuit layouts, answer boxes.
+- Handwriting to LaTeX on request for a selected equation.
+
+### Student-controlled tutoring
+- Hint ladder: the student picks the level (nudge → concept → next step → full check).
+- Check this step: verify a selected line, or point to the first error without solving the rest.
+- Units checker: flag dimensionally inconsistent equations in a selection.
+- AI annotation layer (planned): distinct color, attributed, hideable.
+
+### Dynamics tools
+- Paired free-body diagram = kinetic diagram template.
+- Coordinate system stamps (x–y, n–t, r–θ) with unit vectors; rotatable.
+- Vector arrows tagged with magnitude and angle; components on request.
+- Check my FBD: hint-level feedback on missing or misdirected forces.
+
+### Mechanics of Materials tools
+- Shear and moment diagram checker: the student draws V and M first, then reveals computed diagrams overlaid.
+- Mohr's circle from σx, σy, τxy with principal stresses and angles, to check hand-drawn work.
+- Section properties (centroid, moment of inertia) for sketched composite cross-sections.
+- Unit consistency for MPa/ksi, N·mm/in·lb.
+- Pattern for future aerospace courses (structures, aerodynamics, orbital mechanics, controls): solve first, then reveal to check.
+
+### Learning record
+- Replay of how a problem was solved, from the event ledger (decision 11).
+- Independence record per problem: hints used and their level, as a record, not a score.
+- Redo later: resurface a problem days later on a blank page with the old solution hidden.
+- Mistake log, opt-in, populated from "check this step".
+
+### Organization and study
+- Formula sheet builder: lasso equations from any page, each linked to its source.
+- Links between pages (e.g. a homework step to a lecture slide).
+- Handwriting search, using ChatGPT to read handwriting on request.
+
+### Platform
+- Cloudflare backend for access from any device (cloudflare/, go/no-go checks pending).
+- Standalone browser mode outside ChatGPT.
+- Local iPad drafts for writing without a connection (later).
