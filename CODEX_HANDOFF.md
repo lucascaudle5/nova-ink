@@ -2,7 +2,7 @@
 
 **Snapshot:** October 29, 2026  
 **Packaged reference:** v0.2.1, user-tested on iPad
-**Current local working copy:** v0.2.2; not repackaged or published
+**Current local working copy:** v0.2.3 (branch v0.2.3-reliability); not repackaged or published; iPad acceptance pending (IPAD_ACCEPTANCE.md)
 
 ## Mission
 A ChatGPT-integrated engineering notebook for actual coursework. Preserve productive independent problem-solving while allowing student-initiated contextual tutoring.
@@ -24,14 +24,18 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 - Host tools → Backups lists valid local revisions. Restore creates a new revision, preserves the current valid revision, and checks revision and editor lease.
 - If the current record is corrupt, the original is copied to recovery/ before a backup is restored.
 - Saving requires an unexpired editing lease. Server acknowledgements and revision conflicts remain in place.
-- On October 29, 2026, npm test passed all 24 tests and npm run build:host-test completed in development mode.
-- These automated checks are not live host/iPad acceptance. Real two-client handoff, iPad toolbar acceptance, production deployment, and off-machine recovery remain unverified.
+- v0.2.3 reliability hardening: 16 MB HTTP limit with explicit errors; idempotent saveId saves; lease re-acquired after server restart; persistent editor client ID; client session controller (src/session.ts) that saves before every transition and refuses rather than discards; conflict recovery (Save my version as a new canvas, Take over, confirmed Discard); manifest backup and rebuild; missing/incompatible-record recovery and Start this canvas over; 10 backups; independent verified backup/restore (npm run backup / restore); viewport-clipped Ask NOVA with disclosure text.
+- On October 29, 2026, tsc was clean, npm test passed 76/76, and npm run build:host-test completed in development mode.
+- These automated checks are not live host/iPad acceptance. Real two-client handoff, the iPad checklist, production deployment, and off-machine recovery remain unverified.
 
 ## Implementation map
 - main.ts: MCP endpoint at 127.0.0.1:3001/mcp, /health, and optional stdio.
 - server.ts: UI resource, visible open_nova_ink launcher, and eight app-only notebook/recovery tools. Only the launcher declares the widget resource.
-- storage.mjs: single-process JSON store, snapshots, five valid prior backups, optimistic revision checks, and 45-second editor lease (15-second UI heartbeat). Default data is %LOCALAPPDATA%\NOVA-Ink\data.
-- src/main.tsx: embedded tldraw, 650 ms autosave, named library/resume, viewport-first Ask NOVA, top toolbar, and backup recovery UI.
+- http.ts: Express app (16 MB JSON limit, structured 413/400 errors, /health).
+- storage.mjs: single-process JSON store, snapshots, ten valid prior backups, manifest backup/rebuild, optimistic revision checks, idempotent saveId, and 45-second editor lease (15-second UI heartbeat). Default data is %LOCALAPPDATA%\NOVA-Ink\data.
+- backup.mjs + scripts/backup-data.mjs, scripts/restore-data.mjs: independent verified backup; restore only into an empty folder.
+- src/session.ts: CanvasSession — all save/open/switch/conflict/recovery logic, testable without a browser. src/snapshot.ts: tldraw load validation.
+- src/main.tsx: React/tldraw view over CanvasSession, status banners, backup panel, viewport-clipped Ask NOVA, top toolbar.
 - src/context.ts: geometry and context selection. src/styles.css: notebook and backup panel.
 - scripts/build-host-test.mjs: development-mode evaluation build.
 
@@ -62,7 +66,6 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 The package folder has a local Git repository and the user's personal author identity. The v0.2.1 source baseline is committed locally; there is no remote and nothing is published. The NOVA ARCHAELOGY chat workspace remains separate from the code package.
 
 ## Next steps
-1. Verify lease handoff using two independent clients.
-2. On a disposable canvas, restore an earlier backup and confirm a new revision.
-3. On iPad, verify toolbar, Apple Pencil, touch pan/zoom, canvas resume, and save status.
-4. After acceptance, plan PDF page import and page-associated annotations.
+1. Run IPAD_ACCEPTANCE.md on a physical iPad (includes two-client handoff and backup restore).
+2. v0.3 (incremental, backward compatible): notebooks grouping canvases, rename, soft-delete trash, metadata search, explicit schema versioning with opt-in migration.
+3. After acceptance, plan PDF page import and page-associated annotations.

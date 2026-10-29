@@ -1,29 +1,24 @@
-# NOVA Ink v0.2.2 working copy — persistent, iPad-first notebook development test
+# NOVA Ink v0.2.3 working copy — reliability hardening (pending iPad acceptance)
 
 NOVA Ink is a private tldraw MCP App for ChatGPT on iPad. Focus Mode is the working experience: write independently, request help intentionally, then return to the canvas without losing the camera. Desktop conversation side-by-side is available; iPad side-by-side use is not dependable.
 
-## Current working changes
+## Status
 
-This source folder began as packaged v0.2.1. It is now a local v0.2.2 working copy and has not been repackaged or published.
+v0.2.1 is the last packaged, user-tested reference. This folder is a local v0.2.3 working copy on branch `v0.2.3-reliability`. It is not packaged or published, and **v0.2.3 is not accepted until the physical iPad checklist in IPAD_ACCEPTANCE.md passes.**
 
-- Moved tldraw's native toolbar into its top panel. Drawing behavior is unchanged in code; Apple Pencil and touch behavior still need iPad acceptance.
-- Added an app-only backup picker under Host tools → Backups. Restore creates a new revision and preserves the current valid revision as a backup.
-- If the current saved record is corrupt, the app offers valid backups and copies the damaged file into recovery/ before restoring. A current editor lease and revision check still apply.
-- A client whose editing lease expired must reacquire control before saving.
+## What v0.2.3 changes
 
-## Existing features
+- **Large canvases save.** The HTTP body limit is 16 MB (it was Express's default 100 KB, which silently broke saves of heavy handwriting or pasted images). Requests over the limit get an explicit "Nothing was saved" error. Snapshots over 12 MiB are refused by the store with their size; the app refuses before sending. Pasted images are downscaled to 2048 px and capped at 8 MB.
+- **Edits are never discarded silently.** Switching canvases, creating, restoring, releasing, or tapping the current canvas first saves pending work; if that save fails, the action is refused with a reason. The editor is frozen during transitions so strokes can't land on the wrong canvas.
+- **Conflicts are recoverable.** After a revision conflict or lost editing lease, your local version stays on screen and you can: Save my version as a new canvas, Take over (when the other editor is gone), or Discard and load the saved version (two-tap confirm).
+- **Saves are idempotent.** Each save carries a `saveId`; a retried save whose first reply was lost is recognised instead of reported as a conflict.
+- **Server restarts don't strand edits.** A save with the current revision re-acquires the lease if no one else holds it. The editor client ID persists across reloads, so reopening resumes editing.
+- **Storage self-recovers.** A corrupt or missing manifest is restored from `manifest.backup.json` or rebuilt from canvas files (names are now stored in each record). Missing canvas records and snapshots tldraw can't load enter "Recovery needed" with backup restore or Start this canvas over; damaged files are moved to `recovery/`, never deleted. Ten backups are kept, and camera-only saves no longer push out real revisions.
+- **Status is honest.** Saved, Unsaved changes, Saving…, Not saved (auto-retry with backoff, plus Retry now), Conflict, Read only, Recovery needed, Offline. Banners wrap on narrow iPad widths and actions are full-size buttons.
+- **Ask NOVA discloses only what is shown.** With nothing selected, the image is clipped to the visible viewport and shapes that extend off-screen are marked partially visible without their off-screen text. The panel says what will be sent.
+- **Independent backup and restore** (below).
 
-- Named canvases and last-opened canvas resume
-- Server-side tldraw snapshots, including drawing and camera/session state
-- Autosave after 650 ms of quiet; Save now; server-confirmed Saved, Saving, and Not synced status
-- Optimistic revision checks and one active editor lease per canvas (45 seconds, renewed every 15 seconds)
-- Canvas library, read-only view while another client edits, and explicit Release editing under Host tools
-- Five newest valid revisions retained as local backups
-- Ask NOVA uses selected work or the visible viewport and does not mutate the canvas
-
-This is a private, single-process prototype, not a production multi-user service. It has no end-user authentication, database transactions, encryption at rest, backup export, or durable offline capability. Keep it on 127.0.0.1 behind the existing restricted OpenAI Secure MCP Tunnel. Do not store employer or confidential documents. The snapshot limit is 12 MiB per canvas.
-
-## Run this working copy on Windows
+## Run on Windows
 
 From the project folder containing package.json:
 
@@ -32,37 +27,27 @@ From the project folder containing package.json:
     npm run build:host-test
     npm run start
 
-Or run start-windows-test.cmd to build and launch; it installs dependencies if needed.
+Or run start-windows-test.cmd. The server listens at http://127.0.0.1:3001/mcp; `/health` reports the version. Keep the existing restricted tunnel and plugin. Refresh the plugin if ChatGPT shows a cached older UI.
 
-The server listens at http://127.0.0.1:3001/mcp. The /health endpoint confirms availability. Keep the existing tunnel and plugin; they point to the same local port. Refresh or reconnect the custom plugin if ChatGPT displays a cached older UI.
+### Data location and compatibility
 
-### Durable data
+Data lives at %LOCALAPPDATA%\NOVA-Ink\data (override with `NOVA_INK_DATA_DIR`). v0.2.3 reads v0.2.1/v0.2.2 data as-is; no migration runs. New fields (`saveId`, `savedBy`, `savedAt`, `meta`, `createdBySaveId`, `manifest.backup.json`) are additive and ignored by older versions, so rolling back to v0.2.2 still opens every canvas.
 
-The default data location is %LOCALAPPDATA%\NOVA-Ink\data. It contains the manifest, canvas snapshots, and backups and is separate from the source folder. Keep it private and do not delete it while updating. Backups stay on the hosting machine; there is no off-machine disaster recovery.
+## Independent backup and restore
 
-To use a separate test location, set it before launching:
+Stopping NOVA Ink first is recommended but not required; files that change during the copy are re-copied, and every file is verified by SHA-256.
 
-    $env:NOVA_INK_DATA_DIR = Join-Path $HOME 'Documents\NOVA-Ink-Test-Data'
-    npm run start
+    npm run backup                                  # → Documents\NOVA-Ink-Backups\nova-ink-backup-<time>\
+    npm run backup -- --out E:\NOVA-Backups         # e.g. a USB drive or synced folder
+    npm run restore -- --verify <backup folder>     # check a backup without restoring
+    npm run restore -- <backup folder> <empty folder>
 
-## iPad and host acceptance checklist
+Restore only writes into a folder that is missing or empty; it never overwrites your live data. To switch to the restored copy, stop NOVA Ink and start it with `$env:NOVA_INK_DATA_DIR = '<that folder>'`. Copying the backup folder off this machine is what provides disaster recovery; NOVA Ink does not upload anything.
 
-Use a disposable canvas for backup testing. Do not corrupt real notebook files.
+## Limitations
 
-1. Relaunch the linked NOVA Ink Dev plugin and confirm version 0.2.2.
-2. Create a Dynamics — Test canvas, write F = ma, and pan or zoom.
-3. Wait until the UI explicitly says Saved.
-4. Close NOVA Ink and reopen it in a new ChatGPT tool invocation. Verify drawing, position, and zoom return.
-5. Create another canvas, switch away and back, and verify contents remain separate.
-6. On a disposable canvas with multiple revisions, use Host tools → Backups to restore an earlier revision and confirm it appears as a new revision.
-7. Open the same canvas in a second client while the first is active; it should be read-only. After the first says Saved, use Release editing and request control from the second client.
-8. On iPad, verify top-toolbar placement, Apple Pencil writing, and finger pan/zoom.
-9. Ask NOVA for a hint and verify canvas-context image transfer.
+Private single-process prototype: no end-user authentication, encryption at rest, simultaneous editing, or durable offline mode. If the app closes before Saved appears, the last edits may be lost (teardown attempts a final save). Separate server processes do not coordinate leases. Keep it on 127.0.0.1 behind the tunnel; do not store employer or confidential documents. The tldraw development build is for local evaluation, not production licensing.
 
-Autosave occurs shortly after changes stop. If the app closes before the server confirms Saved, recent edits may be lost. A failed or conflicting save blocks canvas switching rather than silently overwriting data.
+## Verification
 
-## Verification and limitations
-
-On October 29, 2026, npm test passed all 24 tests and npm run build:host-test completed in development mode. Automated lease and backup tests do not replace live two-client or iPad acceptance.
-
-The tldraw development build is for local evaluation, not production licensing. PDF imports, AI-generated annotations, replay/event ledger, simultaneous editing, durable offline use, and multi-instance cloud storage remain future work. Persistence is bound to the server's machine.
+On October 29, 2026: `npx tsc --noEmit` clean; `npm test` 76/76 passing (HTTP payload, storage recovery, session lifecycle against the real MCP server, context disclosure, backup/restore); `npm run build:host-test` succeeded. Automated tests use temporary folders only and do not replace the physical iPad checklist.

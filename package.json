@@ -9,7 +9,9 @@
     "build": "tsc --noEmit && vite build",
     "start": "node --import tsx main.ts",
     "test": "node --import tsx --test --test-force-exit tests/*.test.mjs",
-    "build:host-test": "node scripts/build-host-test.mjs"
+    "build:host-test": "node scripts/build-host-test.mjs",
+    "backup": "node scripts/backup-data.mjs",
+    "restore": "node scripts/restore-data.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

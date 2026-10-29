@@ -29,13 +29,16 @@ Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw a
 - Do not publish a public GitHub repo, redeploy, change infrastructure, or migrate personal data without explicit authorization.
 
 ## Current status — October 29, 2026
-- v0.2.1 is the last packaged and user-tested reference. Current local source is v0.2.2 and is not packaged or published.
+- v0.2.1 is the last packaged and user-tested reference. Current local source is v0.2.3 (branch v0.2.3-reliability), not packaged or published, and not accepted until IPAD_ACCEPTANCE.md passes on a real iPad.
+- v0.2.3: 16 MB HTTP body limit; idempotent saves (saveId); lease re-acquired after restart; client session controller (src/session.ts) that never discards edits silently; conflict recovery including Save my version as a new canvas; manifest backup/rebuild; missing/incompatible record recovery; 10 backups; independent backup/restore scripts (backup.mjs, npm run backup / restore); viewport-clipped Ask NOVA.
+- Tests must use temporary directories (see tests/helpers). Session tests run the real MCP server in-memory via tests/helpers/harness.mjs. Prefer behavioral tests over source-regex tests.
+- Storage changes must stay backward compatible: new fields are optional; no silent migrations.
 - User reported persistence after closing/reopening NOVA Ink and restarting the local server; server outages were reported to show failures as intended.
 - Desktop ChatGPT web has a functional conversation side panel. Native iPad ChatGPT does not provide dependable simultaneous drawing and conversation.
 - Native tldraw toolbar is in the top panel in this source; Pencil and touch need iPad verification.
 - Backup listing and restore are implemented. Restore creates a new revision; a corrupt current file is copied under recovery/ first.
 - Unit tests cover lease acquisition/expiry, conflict handling, backup restore, corrupt records, and retention. They do not prove live multi-client or iPad behavior.
-- On October 29, npm test passed 24 tests and npm run build:host-test completed in development mode. Repeat after code changes.
+- On October 29, npm test passed 76 tests and npm run build:host-test completed in development mode. Repeat after code changes.
 - Actual notebook data is outside Git at %LOCALAPPDATA%\NOVA-Ink\data. Do not inspect or alter it during routine development.
 
 ## Next work
