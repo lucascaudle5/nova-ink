@@ -419,3 +419,28 @@ describe('fast load (openRaw)', () => {
     expect(JSON.parse(await stub.openRaw({ clientId: A }))).toMatchObject({ ok: false, code: 'MISSING_RECORD' })
   })
 })
+describe('imported PDF page provenance', () => {
+  it('a locked background image with source provenance in record meta survives save, load, checkpoint and restore', async () => {
+    const { stub } = newCanvas()
+    await policy(stub, 0)
+    const pdfPage = JSON.parse(JSON.stringify(img3mb))
+    const prov = { novaSource: { sourceId: 'src-1', sourceSha256: 'a'.repeat(64), page: 7 } }
+    for (const r of Object.values(pdfPage.document.store) as any[]) {
+      if (r.typeName === 'asset' || (r.typeName === 'shape' && r.type === 'image')) r.meta = { ...r.meta, ...prov }
+      if (r.typeName === 'shape' && r.type === 'image') r.isLocked = true
+    }
+    await saveDiff(stub, A, null, pdfPage, 0)
+    const opened = await stub.open({ clientId: A })
+    expect(opened.snapshot).toEqual(pdfPage)
+    const metas = Object.values(opened.snapshot.document.store).filter((r: any) => r.meta?.novaSource)
+    expect(metas).toHaveLength(2) // the asset and the locked image shape
+    // Ink drawn over the page is separate records: annotate, then restore the un-annotated checkpoint.
+    const annotated = JSON.parse(JSON.stringify(pdfPage))
+    Object.assign(annotated.document.store, Object.fromEntries(Object.entries(s100.document.store).filter(([, r]: any) => r.typeName === 'shape').slice(0, 5)))
+    await saveDiff(stub, A, pdfPage, annotated, 1)
+    const restored = await stub.restoreCheckpoint({ clientId: A, saveId: sid(), checkpointRevision: 1, expectedRevision: 2 })
+    expect(restored.ok).toBe(true)
+    expect((await stub.open({ clientId: A })).snapshot).toEqual(pdfPage)
+    expect((await stub.diagnostics()).blobs).toBe(1) // the rendered page is still stored once
+  })
+})
