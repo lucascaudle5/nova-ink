@@ -1,0 +1,26 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+
+# Local credentials and machine-specific settings
+.env
+.env.*
+!.env.example
+*.local
+.npmrc
+.tunnel/
+.tunnels/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime notebook content and backups
+/data/
+/backups/
+/canvases/
+/manifest.json
+
+# Logs
+*.log
