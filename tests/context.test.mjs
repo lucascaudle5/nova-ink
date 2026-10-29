@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { intersectsViewport, makeCanvasContext } from '../src/context.ts'
+import { containedInViewport, intersectsViewport, makeCanvasContext } from '../src/context.ts'
+
+test('text of a shape cut off at the viewport edge is not shared in viewport scope', () => {
+  const shapes=[{id:'inside',type:'text',x:10,y:10,props:{text:'visible note'}},{id:'edge',type:'text',x:90,y:10,props:{text:'mostly off screen secret'}}]
+  const result=makeCanvasContext(shapes,[],'Hint?',['inside','edge'],['inside'])
+  assert.equal(result.shapes[0].props.text,'visible note')
+  assert.equal(result.shapes[1].props.text,undefined)
+  assert.equal(result.shapes[1].props.partiallyVisible,true)
+  assert.equal(result.partiallyVisibleShapes,1)
+  assert.doesNotMatch(JSON.stringify(result),/secret/)
+})
+test('explicitly selected shapes share their full text even when partly off screen', () => {
+  const shapes=[{id:'edge',type:'text',x:90,y:10,props:{text:'chosen by the student'}}]
+  const result=makeCanvasContext(shapes,['edge'],'Hint?',[],[])
+  assert.equal(result.shapes[0].props.text,'chosen by the student')
+})
+test('containment requires the whole shape inside the viewport', () => {
+  const v={x:0,y:0,w:100,h:100}
+  assert.equal(containedInViewport({x:10,y:10,w:20,h:20},v),true)
+  assert.equal(containedInViewport({x:90,y:10,w:20,h:20},v),false)
+})
 
 test('selected shapes override visible viewport', () => {
   const shapes=[{id:'a',type:'draw',x:2.1,y:3.8,props:{color:'red'}},{id:'b',type:'text',x:5,y:6,props:{text:'hello'}}]

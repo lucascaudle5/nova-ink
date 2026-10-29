@@ -49,4 +49,16 @@ button.secondary { background: #242832; }
 .backup-items { display:flex; flex-wrap:wrap; gap:8px; }
 .read-only-bar button { padding:5px 9px; }
 .footer-tool { font-size:inherit; padding:0 4px; background:transparent; border:0; text-decoration:underline; color:#c1c9d5; }
+/* v0.2.3 status banner: full-width, wraps, never relies on hover or truncation */
+.status-banner { flex:0 0 auto; padding:8px 12px; display:flex; flex-direction:column; gap:6px; font-size:13px; line-height:1.35; border-bottom:1px solid #404550; background:#20252d; }
+.status-banner p { margin:0; white-space:normal; overflow-wrap:anywhere; }
+.status-banner.warn { background:#4a3a1c; border-color:#8a6a2a; }
+.status-banner.danger { background:#4d2026; border-color:#9b3b47; }
+.banner-busy { color:#b9c7da; font-style:italic; }
+.banner-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.banner-actions button { min-height:40px; }
+button.armed { background:#9b3b47; border-color:#d86b78; }
+button.link { background:transparent; border:0; padding:0 4px; text-decoration:underline; color:inherit; }
+.ask-status { color:#f3ca7a; }
+.library-items button:disabled { opacity:.6; }
 @media(max-width:650px) { .save-now { display:none; } .topbar { gap:6px; padding:6px; } .topbar button { padding:7px; font-size:12px; } .save-indicator { font-size:10px; } }

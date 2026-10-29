@@ -10,7 +10,7 @@ import type { NotebookStore } from './storage.mjs'
 export const HTTP_BODY_LIMIT_BYTES = MAX_SNAPSHOT_BYTES + 4 * 1024 * 1024
 
 export function createHttpApp(store: NotebookStore, { host = '127.0.0.1', bodyLimitBytes = HTTP_BODY_LIMIT_BYTES } = {}) {
-  const app = createMcpExpressApp({ host, jsonLimit: bodyLimitBytes })
+  const app = createMcpExpressApp({ host, jsonLimit: `${bodyLimitBytes}b` })
   app.use(cors())
   app.get('/health', (_req: Request, res: Response) => res.json({ ok: true, app: 'nova-ink-mcp', version: VERSION }))
   app.all('/mcp', async (req: Request, res: Response) => {

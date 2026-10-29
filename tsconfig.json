@@ -13,5 +13,5 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true
   },
-  "include": ["main.ts", "server.ts", "vite.config.ts", "src/**/*"]
+  "include": ["main.ts", "server.ts", "http.ts", "vite.config.ts", "src/**/*"]
 }
