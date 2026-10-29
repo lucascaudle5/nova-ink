@@ -4,6 +4,14 @@
 
 Before starting: back up real data (`npm run backup`), launch with start-windows-test.cmd, and confirm `/health` reports version 0.2.3. Use canvases named `Test — …`; do not experiment on real coursework canvases. Record Pass / Fail / Notes for each step, plus iPad model, iPadOS version, and ChatGPT app version.
 
+## Quick check (~10 min, after every change)
+A smoke test, not acceptance. It selects items from the full checklist below; the full checklist remains the per-release gate. Use a disposable `Test` canvas. Record Pass / Fail / Notes.
+- [ ] Pencil writing (section 1): write a line and an equation; no dropped or delayed strokes; Saved appears within a few seconds of stopping.
+- [ ] Palm rejection (section 2): rest your palm while writing; no stray marks, no accidental pan.
+- [ ] Pan/zoom (section 3): two-finger pan and pinch zoom are smooth; status returns to Saved.
+- [ ] Close/reopen with Saved (section 6): write, wait for Saved, close and reopen; drawing, position, zoom, and last canvas return.
+- [ ] Switching canvases (section 9): switch between two canvases; contents stay separate and nothing is lost.
+
 ## 1. Apple Pencil
 - [ ] Write a paragraph and an equation quickly; no dropped or delayed strokes compared with v0.2.1.
 - [ ] Pressure and eraser behave as in v0.2.1. Toolbar sits at the top and every tool is reachable.
