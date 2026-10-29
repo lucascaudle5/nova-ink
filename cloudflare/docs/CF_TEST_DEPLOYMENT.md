@@ -4,6 +4,15 @@ Purpose: answer the three go/no-go questions of `V0.3_STORAGE_AND_CLOUDFLARE.md`
 
 Worker name `nova-ink-test` on `workers.dev`. Delete it when done (section 6).
 
+## Where we stopped (Oct 29, 2026, 5:40 PM)
+
+- **Live on real Cloudflare:** `https://nova-ink-test.ai-nova-personal.workers.dev` (Worker, 2 Durable Objects, `OAUTH_KV`, Access SaaS OIDC app, six secrets set by the user). Left fully running by the user's choice. Only the allowed email can sign in; unconfigured it returns 503 everywhere except `/health`.
+- **Verified on real Cloudflare:** fail-closed with no secrets; sign-in through Access to ChatGPT; open and save through ChatGPT at s100 to s3000 and img3mb/img8mb, up to a 10.19 MiB save; CPU and wall numbers in section 5. No `exceededCpu` / `exceededMemory` anywhere.
+- **Not verified:** refresh behaviour (use the connector again after more than 1 h, then the next day, and record whether ChatGPT asks to sign in again); free-plan CPU enforcement (real widget saves used 30-317 ms of Worker CPU against a documented 10 ms free limit and were not terminated, so this could change); the cause of "Upload failed" on dropped images (user thinks tldraw / the widget, not tested on the Windows server); browser-side performance; concurrency.
+- **Local only:** the 70 vitest tests (34 storage + 36 auth/MCP) and 5 Node diag-data tests.
+- **Tail tips on Windows:** do not pipe `wrangler tail` through PowerShell 5.1 `>` and then expect UTF-8; `scripts/tail-report.mjs <file>` handles UTF-16 and wrangler's multi-line JSON. Raw tail files can contain request headers: keep them out of the repo and delete them after use. At home run `npx wrangler login` first.
+- **Never in git or chat:** the Access client secret and the other five secrets.
+
 ## 1. What exists
 
 ```
