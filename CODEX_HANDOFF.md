@@ -90,8 +90,14 @@ The user is an aerospace engineering student (current courses: Dynamics, Mechani
 5. Hint ladder and "check this step", then "redo later".
 6. Remaining items below.
 
+### Drawing engine decision (October 29, 2026)
+- The user will replace tldraw with a NOVA-owned handwriting engine built from scratch: no watermark, no license dependency, and the user builds all of it. Do not copy tldraw source (its license forbids it); MIT-licensed libraries such as perfect-freehand are acceptable.
+- tldraw stays in place until the new engine matches it on the iPad. Until then, tldraw runs only as a development-mode evaluation build, not as a licensed production canvas.
+- Start with a bare-bones engine spike tested on the iPad inside ChatGPT against tldraw (Pencil latency, pressure, palm rejection, pan/zoom at 3,000 strokes). Pen feel needs frequent iPad testing; this is the one area where batch-only iPad testing does not fit.
+- The engine owns a documented NOVA stroke/page format. Plan a one-time, non-destructive converter from existing tldraw snapshots. Ask NOVA's viewport image and shape context must be reimplemented on the new engine.
+- Keep engineering tools, tutoring, and the learning record independent of the drawing engine.
+
 ### Long-term foundations
-- Check tldraw's license terms for long-term personal, non-commercial use before investing further; it is the hardest dependency to replace.
 - Data ownership: documented storage formats, PDF export, and tested off-machine backups so notes outlive any app, host, or AI provider.
 - Host independence: standalone browser mode alongside the ChatGPT MCP App, and AI requests behind one replaceable adapter.
 - Maintainability: the user is the long-term maintainer. Explain changes, keep tests next to features, and keep the code readable.
