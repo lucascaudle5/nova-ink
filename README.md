@@ -1,10 +1,10 @@
-# NOVA Ink v0.2.3 working copy — reliability hardening (pending iPad acceptance)
+# NOVA Ink v0.2.3 working copy — reliability hardening
 
 NOVA Ink is a private tldraw MCP App for ChatGPT on iPad. Focus Mode is the working experience: write independently, request help intentionally, then return to the canvas without losing the camera. Desktop conversation side-by-side is available; iPad side-by-side use is not dependable.
 
 ## Status
 
-v0.2.1 is the last packaged, user-tested reference. This folder is a local v0.2.3 working copy on branch `v0.2.3-reliability`. It is not packaged or published, and **v0.2.3 is not accepted until the physical iPad checklist in IPAD_ACCEPTANCE.md passes.**
+Current status, versions, and verification results: see CODEX_HANDOFF.md (the single source of truth).
 
 ## What v0.2.3 changes
 
@@ -57,7 +57,3 @@ Restore only writes into a folder that is missing or empty; it never overwrites 
 ## Limitations
 
 Private single-process prototype: no end-user authentication, encryption at rest, simultaneous editing, or durable offline mode. If the app closes before Saved appears, the last edits may be lost (teardown attempts a final save). Separate server processes do not coordinate leases. Keep it on 127.0.0.1 behind the tunnel; do not store employer or confidential documents. The tldraw development build is for local evaluation, not production licensing.
-
-## Verification
-
-On October 29, 2026: `npx tsc --noEmit` clean; `npm test` 76/76 passing (HTTP payload, storage recovery, session lifecycle against the real MCP server, context disclosure, backup/restore); `npm run build:host-test` succeeded. Automated tests use temporary folders only and do not replace the physical iPad checklist.
