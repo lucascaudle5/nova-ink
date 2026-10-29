@@ -9,13 +9,28 @@
 // CPU/wall fields: I have NOT seen a real tail sample yet, so this accepts the names Cloudflare uses in trace events
 // (cpuTime, wallTime, CPUTimeMs, WallTimeMs, ...). If a row shows "?" for CPU, look at the raw event printed with --raw
 // and tell me the field name; the dashboard (Workers & Pages -> nova-ink-test -> Metrics) also charts CPU time.
-import { createReadStream } from 'node:fs'
-import readline from 'node:readline'
+import { readFileSync } from 'node:fs'
 
+// Real wrangler output (seen 2026-10-29): fields cpuTime / wallTime, and each event is a PRETTY-PRINTED multi-line JSON
+// object, not one object per line. PowerShell 5.1 `>` also writes UTF-16. So: read everything, decode either encoding,
+// and split on top-level braces.
 const args = process.argv.slice(2)
 const raw = args.includes('--raw')
 const file = args.find(a => !a.startsWith('--'))
-const input = file ? createReadStream(file) : process.stdin
+const buf = file ? readFileSync(file) : readFileSync(0)
+const text = (buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le') : buf.toString('utf8')).replace(/^\uFEFF/, '')
+
+function* topLevelObjects(s) {
+  let depth = 0, start = -1, inStr = false, esc = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue }
+    if (c === '"') { inStr = true; continue }
+    if (c === '{') { if (depth++ === 0) start = i } else if (c === '}' && --depth === 0) {
+      try { yield JSON.parse(s.slice(start, i + 1)) } catch { /* skip */ }
+    }
+  }
+}
 
 const pick = (event, names) => { for (const n of names) if (typeof event[n] === 'number') return event[n]; return null }
 const fmt = v => v === null || v === undefined ? '?' : (Math.round(v * 100) / 100).toString()
@@ -23,11 +38,8 @@ const fmt = v => v === null || v === undefined ? '?' : (Math.round(v * 100) / 10
 const rows = []
 const problems = []
 let seen = 0
-const rl = readline.createInterface({ input })
-rl.on('line', line => {
-  let event
-  try { event = JSON.parse(line) } catch { return }
-  if (!event || typeof event !== 'object') return
+for (const event of topLevelObjects(text)) {
+  if (!event || typeof event !== 'object') continue
   seen++
   if (raw && seen <= 3) console.error('RAW EVENT:', JSON.stringify(event).slice(0, 1500))
   const cpu = pick(event, ['cpuTime', 'cpuTimeMs', 'CPUTimeMs', 'cpu_time_ms', 'cpuMs'])
@@ -43,8 +55,8 @@ rl.on('line', line => {
       else if (parsed?.evt === 'tool') rows.push({ when, kind: 'tool', name: parsed.tool, bytesIn: parsed.bytesIn, code: parsed.code, outcome, cpu, wall })
     }
   }
-})
-rl.on('close', () => {
+}
+{
   rows.sort((a, b) => String(a.when).localeCompare(String(b.when)))
   console.log(`events read: ${seen}, matched rows: ${rows.length}`)
   console.log('\nkind    | step / tool                                            | cpu ms | wall ms | outcome | extra')
@@ -56,4 +68,4 @@ rl.on('close', () => {
   if (problems.length) console.log(`\nNON-OK OUTCOMES (limit hit?):\n  ${problems.join('\n  ')}`)
   else console.log('\nNo non-ok outcomes (no exceededCpu / exceededMemory) in this capture.')
   if (rows.length && rows.every(r => r.cpu === null)) console.log('\nCPU fields were not found in the events. Re-run with --raw to see the event shape.')
-})
+}

@@ -122,6 +122,27 @@ Run through ChatGPT against the real deployment. **Unit and metric (CPU vs wall,
 | Steady-state edit | 35 | 31 | 32 |
 | Forced checkpoint | 38 | 51 | 75 |
 
+### Measured CPU from `wrangler tail` (Oct 29, 2026, real Cloudflare, free plan, run ids b9ec99dc / d664c2a0 / 97459a45)
+
+Real field names in wrangler's JSON tail: `cpuTime`, `wallTime` (ms), `outcome`. Output is pretty-printed multi-line JSON, and PowerShell 5.1 `>` writes UTF-16; `scripts/tail-report.mjs` now handles both. All 54 captured events had outcome `ok` (no `exceededCpu` / `exceededMemory`). The tail dropped the later `s1500` steps (only `s1500 / generate` was captured), so `s1500` CPU is still unmeasured.
+
+Durable Object invocation, cpu ms / wall ms:
+
+| Step | s100 | s500 | s3000 | img3mb | img8mb |
+|---|---|---|---|---|---|
+| first full save | 6 / 94 | 15 / 200 | 76 / 470 | 33 / 200 | 55 / 287 |
+| open | 1 / 10 | 8 / 17 | 29 / 47 | 22 / 41 | 46 / 61 |
+| open (raw/fast) | 1 / 9 | 5 / 14 | 23 / 38 | 55 / 74 | 142 / 158 |
+| 1st edit (inline checkpoint) | 10 / 39 | 13 / 48 | 55 / 97 | 6 / 41 | 5 / 40 |
+| steady-state edit | 1 / 30 | 1 / 35 | 2 / 43 | 4 / 38 | 3 / 38 |
+| camera-only save | 0 / 28 | 0 / 35 | 1 / 39 | 0 / 34 | 0 / 34 |
+| forced checkpoint | 2 / 30 | 10 / 45 | 48 / 89 | 1 / 35 | 1 / 35 |
+| generate (diagnostic only, not a product path) | 27 / 65 | 100 / 265 | 956 / 1036 | 204 / 267 | 487 / 549 |
+
+Worker invocation for the `nova_ink_diagnostics` tool call itself (three calls): CPU 12, 48, 13 ms. These succeeded although the Workers Free page documents 10 ms CPU per HTTP request ("each isolate has some built-in flexibility"), so this is a risk to keep watching, not a pass. The Durable Objects limits page lists 30 s CPU per invocation without a free/paid split, while saying DOs have "the same per invocation CPU limits as any Workers do"; the numbers here do not settle that ambiguity.
+
+Not yet measured: the real widget path (`ink_open_canvas`, `ink_save_canvas` through the Worker, which adds JSON work on top of the DO), `s1500` CPU, and browser-side cost.
+
 ### Results table (fill in)
 
 | Check | Size / step | cpu ms | wall ms | Outcome | Notes |
