@@ -44,6 +44,9 @@ button.secondary { background: #242832; }
 .canvas-library p { font-size:11px; margin:0; color:#b1bdcb; }
 .canvas-loading { display:grid; place-items:center; height:100%; color:#d8e3ed; background:#242931; }
 .read-only-bar { flex:0 0 auto; background:#503923; padding:6px 12px; font-size:12px; display:flex; gap:8px; align-items:center; }
+.backup-panel { flex:0 0 auto; padding:10px 12px; background:#242b35; border-bottom:1px solid #4a5262; display:flex; flex-direction:column; gap:8px; }
+.backup-panel p { margin:0; font-size:11px; color:#c3cedb; }
+.backup-items { display:flex; flex-wrap:wrap; gap:8px; }
 .read-only-bar button { padding:5px 9px; }
 .footer-tool { font-size:inherit; padding:0 4px; background:transparent; border:0; text-decoration:underline; color:#c1c9d5; }
 @media(max-width:650px) { .save-now { display:none; } .topbar { gap:6px; padding:6px; } .topbar button { padding:7px; font-size:12px; } .save-indicator { font-size:10px; } }

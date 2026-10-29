@@ -11,8 +11,8 @@ test('only the visible launcher binds the tldraw widget', () => {
   assert.doesNotMatch(server, /const appOnly = \{ ui: \{ resourceUri:/)
 })
 
-test('all six persistence methods remain private to the embedded app', () => {
-  for (const name of ['ink_list_canvases', 'ink_create_canvas', 'ink_open_canvas', 'ink_save_canvas', 'ink_heartbeat', 'ink_release_editor']) {
+test('all notebook and recovery operations remain private to the embedded app', () => {
+  for (const name of ['ink_list_canvases', 'ink_create_canvas', 'ink_open_canvas', 'ink_list_backups', 'ink_restore_backup', 'ink_save_canvas', 'ink_heartbeat', 'ink_release_editor']) {
     assert.match(server, new RegExp(`registerAppTool\\(server, '${name}'`))
   }
 })

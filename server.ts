@@ -17,7 +17,7 @@ function result(data: StorageResult) {
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'NOVA Ink Private Notebook', version: '0.2.1' })
+  const server = new McpServer({ name: 'NOVA Ink Private Notebook', version: '0.2.2' })
 
   registerAppTool(server, 'open_nova_ink', {
     title: 'Open NOVA Ink',
@@ -31,14 +31,13 @@ export function createServer(): McpServer {
       'openai/ui': { entrypoints: [{ type: 'thread' }] },
     },
   }, async () => ({
-    content: [{ type: 'text', text: 'Opening NOVA Ink v0.2: named canvases are saved to the private MCP server. Saving is asynchronous; check the saved status before closing the notebook. The user initiates all tutoring requests.' }],
-    structuredContent: { application: 'nova-ink', phase: 'persistent-canvas-test', version: '0.2.1' },
+    content: [{ type: 'text', text: 'Opening NOVA Ink v0.2.2: named canvases are saved to the private MCP server. Saving is asynchronous; check the saved status before closing the notebook. The user initiates all tutoring requests.' }],
+    structuredContent: { application: 'nova-ink', phase: 'persistent-canvas-test', version: '0.2.2' },
   }))
 
-  // These six tools are private data operations, not UI launchers.
-  // A widget URI here made ChatGPT's tool refresh report that private tools
-  // could not render their widgets. The visible open_nova_ink tool alone
-  // owns the UI template. App-only visibility still permits app-origin calls.
+  // Private notebook and recovery operations are not UI launchers.
+  // Only open_nova_ink owns the widget resource; app-only visibility still
+  // permits calls from the embedded notebook without exposing data tools.
   const appOnly = { ui: { visibility: ['app' as const] } }
   registerAppTool(server, 'ink_list_canvases', {
     description: 'Read the private NOVA Ink canvas library', inputSchema: z.object({}), _meta: appOnly,
@@ -49,6 +48,14 @@ export function createServer(): McpServer {
   registerAppTool(server, 'ink_open_canvas', {
     description: 'Restore a canvas and obtain editing control if available', inputSchema: z.object({ canvasId: uuid, clientId: uuid }), _meta: appOnly,
   }, async ({ canvasId, clientId }) => result(await notebooks.open(canvasId, clientId)))
+  registerAppTool(server, 'ink_list_backups', {
+    description: 'List valid local backup revisions for a canvas',
+    inputSchema: z.object({ canvasId: uuid }), _meta: appOnly,
+  }, async ({ canvasId }) => result(await notebooks.listBackups(canvasId)))
+  registerAppTool(server, 'ink_restore_backup', {
+    description: 'Restore a user-selected local backup as a new revision after revision and editor-lease checks',
+    inputSchema: z.object({ canvasId: uuid, clientId: uuid, backupRevision: z.number().int().positive(), expectedCurrentRevision: z.number().int().nonnegative().nullable() }), _meta: appOnly,
+  }, async ({ canvasId, clientId, backupRevision, expectedCurrentRevision }) => result(await notebooks.restoreBackup(canvasId, clientId, backupRevision, expectedCurrentRevision)))
   registerAppTool(server, 'ink_save_canvas', {
     description: 'Save a complete tldraw snapshot with optimistic revision checking',
     inputSchema: z.object({ canvasId: uuid, clientId: uuid, expectedRevision: z.number().int().nonnegative(), snapshot: z.record(z.string(), z.unknown()) }), _meta: appOnly,

@@ -19,6 +19,7 @@ coverage/
 # Runtime notebook content and backups
 /data/
 /backups/
+/recovery/
 /canvases/
 /manifest.json
 

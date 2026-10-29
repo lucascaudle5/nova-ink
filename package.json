@@ -1,7 +1,7 @@
 {
   "name": "nova-ink-chatgpt-mcp",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "NOVA Ink private persisted canvases, autosave and viewport-first tutoring",
   "scripts": {

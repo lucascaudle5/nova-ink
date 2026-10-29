@@ -1,5 +1,5 @@
 /** NOVA Ink v0.2 private, single-process development notebook store. */
-import { mkdir, readFile, rename, readdir, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, readdir, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -12,6 +12,29 @@ export const LEASE_MS = 45_000
 
 const isId = id => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id)
 const now = () => new Date().toISOString()
+
+function hasSnapshotShape(snapshot) {
+  return !!snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) && !!snapshot.document && !!snapshot.session
+}
+
+function isSnapshot(snapshot) {
+  if (!hasSnapshotShape(snapshot)) return false
+  try {
+    const serialized = JSON.stringify(snapshot)
+    return typeof serialized === 'string' && Buffer.byteLength(serialized, 'utf8') <= MAX_SNAPSHOT_BYTES
+  } catch { return false }
+}
+
+function isRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record) || !Number.isSafeInteger(record.revision) || record.revision < 0) return false
+  return record.revision === 0 ? record.snapshot === null : isSnapshot(record.snapshot)
+}
+
+function corruptRecordError() {
+  const error = new Error('Saved canvas record is unreadable or invalid.')
+  error.code = 'CORRUPT_RECORD'
+  return error
+}
 
 async function atomicJson(file, value) {
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -47,9 +70,47 @@ export class NotebookStore {
     return path.join(this.dir, 'canvases', `${id}.json`)
   }
   async loadRecord(id) {
-    try { return JSON.parse(await readFile(this.canvasFile(id), 'utf8')) }
+    let raw
+    try { raw = await readFile(this.canvasFile(id), 'utf8') }
     catch (e) { if (e.code === 'ENOENT') return { revision: 0, snapshot: null }; throw e }
+    let record
+    try { record = JSON.parse(raw) } catch { throw corruptRecordError() }
+    if (!isRecord(record)) throw corruptRecordError()
+    return record
   }
+
+  async readValidBackups(id) {
+    const directory = path.join(this.dir, 'backups')
+    const files = await readdir(directory)
+    const prefix = `${id}-`
+    const backups = []
+    for (const name of files) {
+      if (!name.startsWith(prefix) || !name.endsWith('.json')) continue
+      const revisionText = name.slice(prefix.length, -5)
+      if (!/^\d+$/.test(revisionText)) continue
+      const revision = Number(revisionText)
+      if (!Number.isSafeInteger(revision) || revision < 1) continue
+      let record
+      try { record = JSON.parse(await readFile(path.join(directory, name), 'utf8')) }
+      catch (e) { if (e.code === 'ENOENT' || e instanceof SyntaxError) continue; throw e }
+      if (isRecord(record) && record.revision === revision) backups.push({ revision, record })
+    }
+    return backups.sort((a, b) => b.revision - a.revision)
+  }
+
+  async trimBackups(id) {
+    const directory = path.join(this.dir, 'backups')
+    const prefix = `${id}-`
+    const keep = new Set((await this.readValidBackups(id)).slice(0, 5).map(backup => backup.revision))
+    for (const name of await readdir(directory)) {
+      if (!name.startsWith(prefix) || !name.endsWith('.json')) continue
+      const revisionText = name.slice(prefix.length, -5)
+      if (!/^\d+$/.test(revisionText)) continue
+      const revision = Number(revisionText)
+      if (Number.isSafeInteger(revision) && revision > 0 && !keep.has(revision)) await unlink(path.join(directory, name))
+    }
+  }
+
   leaseInfo(id, clientId, acquire) {
     const current = this.leases.get(id)
     const t = Date.now()
@@ -84,12 +145,25 @@ export class NotebookStore {
     return { ok: true, canvas: metadata }
   }) }
 
+  async listBackups(id) { return this.serialize(async () => {
+    if (!isId(id)) return { ok: false, code: 'INVALID_ID', message: 'Canvas id is invalid.' }
+    const manifest = await this.loadManifest()
+    if (!manifest.canvases.some(canvas => canvas.id === id)) return { ok: false, code: 'NOT_FOUND', message: 'Canvas was not found.' }
+    const backups = await this.readValidBackups(id)
+    return { ok: true, backups: backups.map(({ revision }) => ({ revision })) }
+  }) }
+
   async open(id, clientId) { return this.serialize(async () => {
     this.checkClient(clientId)
     const m = await this.loadManifest()
     const canvas = m.canvases.find(c => c.id === id)
     if (!canvas) return { ok: false, code: 'NOT_FOUND', message: 'Canvas was not found.' }
-    const record = await this.loadRecord(id)
+    let record
+    try { record = await this.loadRecord(id) }
+    catch (error) {
+      if (error.code === 'CORRUPT_RECORD') return { ok: false, code: 'CORRUPT_RECORD', message: 'This canvas file is damaged. Choose a valid backup to restore it.' }
+      throw error
+    }
     const lease = this.leaseInfo(id, clientId, true)
     m.lastOpenedId = id
     await this.writeManifest(m)
@@ -109,19 +183,74 @@ export class NotebookStore {
     return { ok: true }
   }) }
 
+  async restoreBackup(id, clientId, backupRevision, expectedCurrentRevision) { return this.serialize(async () => {
+    this.checkClient(clientId)
+    if (!isId(id) || !Number.isSafeInteger(backupRevision) || backupRevision < 1 || !(expectedCurrentRevision === null || (Number.isSafeInteger(expectedCurrentRevision) && expectedCurrentRevision >= 0))) {
+      return { ok: false, code: 'INVALID_REQUEST', message: 'Canvas or backup revision is invalid.' }
+    }
+    const manifest = await this.loadManifest()
+    const canvas = manifest.canvases.find(c => c.id === id)
+    if (!canvas) return { ok: false, code: 'NOT_FOUND', message: 'Canvas was not found.' }
+    const backups = await this.readValidBackups(id)
+    const selected = backups.find(backup => backup.revision === backupRevision)
+    if (!selected) return { ok: false, code: 'BACKUP_UNAVAILABLE', message: 'That backup is missing or invalid.' }
+
+    let current
+    let currentCorrupt = false
+    try { current = await this.loadRecord(id) }
+    catch (error) {
+      if (error.code !== 'CORRUPT_RECORD') throw error
+      currentCorrupt = true
+    }
+    if (expectedCurrentRevision === null ? !currentCorrupt : (currentCorrupt || current.revision !== expectedCurrentRevision)) {
+      return { ok: false, code: 'CONFLICT', message: 'The canvas changed after backups were listed. Reload before restoring.' }
+    }
+
+    const lease = this.leaseInfo(id, clientId, true)
+    if (lease.readOnly) return { ok: false, code: 'LEASE_HELD', message: 'Another editor has control. No backup was restored.' }
+    const nextRevision = Math.max(current?.revision ?? 0, ...backups.map(backup => backup.revision)) + 1
+    if (!Number.isSafeInteger(nextRevision)) return { ok: false, code: 'REVISION_LIMIT', message: 'Canvas revision limit reached.' }
+
+    let recoveryCopyPreserved = false
+    if (currentCorrupt) {
+      const recoveryDirectory = path.join(this.dir, 'recovery')
+      await mkdir(recoveryDirectory, { recursive: true })
+      const preserved = path.join(recoveryDirectory, `${id}-${Date.now()}-${randomUUID()}.corrupt`)
+      await copyFile(this.canvasFile(id), preserved)
+      recoveryCopyPreserved = true
+    } else if (current && current.revision > 0) {
+      await atomicJson(path.join(this.dir, 'backups', `${id}-${current.revision}.json`), current)
+    }
+
+    const restored = { revision: nextRevision, snapshot: selected.record.snapshot }
+    await atomicJson(this.canvasFile(id), restored)
+    canvas.updatedAt = now()
+    manifest.lastOpenedId = id
+    await this.writeManifest(manifest)
+    await this.trimBackups(id)
+    this.leaseInfo(id, clientId, true)
+    return { ok: true, revision: nextRevision, restoredRevision: backupRevision, recoveryCopyPreserved, savedAt: canvas.updatedAt }
+  }) }
+
   async save(id, clientId, expectedRevision, snapshot) { return this.serialize(async () => {
     this.checkClient(clientId)
     const manifest = await this.loadManifest()
     const canvas = manifest.canvases.find(c => c.id === id)
     if (!canvas) return { ok: false, code: 'NOT_FOUND', message: 'Canvas not found.' }
-    if (this.leaseInfo(id, clientId, false).readOnly || this.leases.get(id)?.clientId !== clientId) {
-      return { ok: false, code: 'LEASE_LOST', message: 'Another editor has control. No changes were saved.' }
+    const lease = this.leases.get(id)
+    if (!lease || lease.clientId !== clientId || lease.until <= Date.now()) {
+      return { ok: false, code: 'LEASE_LOST', message: 'Your editing lease expired or another editor has control. No changes were saved.' }
     }
-    const current = await this.loadRecord(id)
+    let current
+    try { current = await this.loadRecord(id) }
+    catch (error) {
+      if (error.code === 'CORRUPT_RECORD') return { ok: false, code: 'CORRUPT_RECORD', message: 'Saved canvas data is damaged. Restore a valid backup before saving.' }
+      throw error
+    }
     if (!Number.isSafeInteger(expectedRevision) || current.revision !== expectedRevision) {
       return { ok: false, code: 'CONFLICT', revision: current.revision, message: 'The server has a newer revision. Nothing was overwritten.' }
     }
-    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || !snapshot.document || !snapshot.session) {
+    if (!hasSnapshotShape(snapshot)) {
       return { ok: false, code: 'INVALID_SNAPSHOT', message: 'Expected a tldraw snapshot with document and session.' }
     }
     const serialized = JSON.stringify(snapshot)
@@ -137,10 +266,8 @@ export class NotebookStore {
     canvas.updatedAt = now()
     await this.writeManifest(manifest)
     this.leaseInfo(id, clientId, true)
-    // Retain 5 backup revisions, so a mistake or bad write is recoverable manually.
-    const files = (await readdir(path.join(this.dir, 'backups'))).filter(f => f.startsWith(`${id}-`) && f.endsWith('.json'))
-    const older = files.map(f => ({ name: f, n: Number(f.slice(id.length + 1, -5)) })).sort((a,b) => b.n - a.n).slice(5)
-    for (const file of older) await unlink(path.join(this.dir, 'backups', file.name))
+    // Retain 5 prior revisions so a mistake or bad write can be recovered manually.
+    await this.trimBackups(id)
     return { ok: true, revision: next.revision, savedAt: canvas.updatedAt }
   }) }
 }

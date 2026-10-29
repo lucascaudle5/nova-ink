@@ -1,41 +1,47 @@
 # NOVA Ink — Codex Repository Instructions
 
 ## Purpose
-Build an iPad-first, Apple Pencil engineering notebook inside ChatGPT using tldraw + MCP Apps. Maintain the existing working prototype; avoid rebuilding it from scratch.
+Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw and MCP Apps. Maintain the working prototype; do not rebuild from scratch.
 
 ## Read first
-- `README.md` — actual scripts, storage format, and limitations.
-- `CODEX_HANDOFF.md` — accepted product decisions, test evidence, and next priorities.
-- `server.ts`, `main.ts`, `storage.mjs`, `src/main.tsx`, `src/context.ts` — current implementation.
-- `tests/` — current automated expectations.
+- README.md for scripts, storage, evidence, and limitations.
+- CODEX_HANDOFF.md for product decisions and status.
+- server.ts, main.ts, storage.mjs, src/main.tsx, src/context.ts, and tests/.
 
 ## Engineering agreements
-- Work directly in the existing working source directory. Preserve its local configuration, tunnel connectivity, and saved notebook data.
-- Prefer small, reviewed changes and Git commits over full-package replacement.
-- Before editing, inspect the existing implementation and tests; do not assume earlier chat descriptions exactly match the local files.
-- For meaningful changes, run `npm test` and `npm run build:host-test` when possible, and report commands/results. Run an iPad host test only with the user.
-- Never claim a successful build, deployment, data write, or on-device test without evidence.
-- Do not silently alter existing saved snapshots, canvas IDs, revisions, camera state, or the data storage location.
-- The server must not claim `Saved` until it receives a successful durable save acknowledgement. On error, use `Not synced` and preserve recoverable local state.
-- Preserve one active editing lease per canvas and server-side revision conflict protection.
-- Prefer default tldraw pencil/touch behavior; user already confirmed Apple Pencil and finger pan/zoom work naturally.
-- ChatGPT host controls presentation. Do not add undocumented display-mode flags to force a native iPad side pane.
-- The user initiates every AI hint. Chat hints do not mutate the canvas; AI annotations require a separate explicit selection and attribution.
-- Keep the user's independent work distinguishable from AI-assisted edits in future learning records.
-- Distinguish reported observations, verified runtime behavior, future plans, and assumptions.
+- Work in the existing source directory. Preserve local configuration, tunnel connectivity, and saved notebook data.
+- Inspect implementation and tests before editing; make small reviewed changes.
+- For meaningful changes, run npm test and npm run build:host-test when possible. Report actual results. iPad tests happen with the user.
+- Never claim successful builds, deployments, data writes, or device tests without evidence.
+- Do not silently alter saved snapshots, IDs, revisions, camera state, or data location.
+- Show Saved only after durable server acknowledgement. On failure, show Not synced and preserve recoverable state.
+- Preserve one active editor lease per canvas and revision conflict protection.
+- Preserve tldraw's native Pencil/touch behavior. Top toolbar is implemented but needs iPad acceptance.
+- Do not use undocumented host metadata to force an iPad side pane.
+- The user initiates every AI hint. Chat hints do not mutate the canvas; AI annotations need separate explicit selection and attribution.
+- Distinguish independent student work from AI-assisted edits. Separate user reports, verified behavior, plans, and assumptions.
 
 ## Privacy and environment
-- Keep MCP server bound to `127.0.0.1` and use the existing restricted OpenAI Secure MCP Tunnel for testing.
-- Do not log or commit API keys, tokens, tunnel profiles, `.env` files, real canvas contents, or `%LOCALAPPDATA%\\NOVA-Ink\\data`.
-- Keep project ownership and use of employer resources separate; do not ingest employer proprietary information.
-- Current tldraw build uses `NODE_ENV=development` for local evaluation. Do not claim this provides a production license.
-- Do not create or publish public GitHub repositories, redeploy, change infrastructure, or migrate personal data without explicit user approval.
+- Keep the MCP server bound to 127.0.0.1 behind the existing restricted OpenAI Secure MCP Tunnel.
+- Never log or commit keys, tokens, tunnel profiles, .env files, real canvas content, or %LOCALAPPDATA%\NOVA-Ink\data.
+- Do not ingest employer proprietary information.
+- NODE_ENV=development is for local evaluation; it does not provide a production license.
+- Do not publish a public GitHub repo, redeploy, change infrastructure, or migrate personal data without explicit authorization.
 
-## Current baseline
-- **v0.2.1** is the last packaged reference, with app-only widget metadata fix.
-- User reported on October 29, 2026 that persistence survives closing/reopening and backend restarts; failure on server outage behaved as intended.
-- Side-by-side layout works in Windows ChatGPT web; native iPad ChatGPT currently exposes working fullscreen/inline presentation, not usable simultaneous drawing plus conversation.
-- Two remaining *separately testable* reliability items: concurrent editor handoff and backup recovery. Neither should be marked complete based on earlier unit tests alone.
+## Current status — October 29, 2026
+- v0.2.1 is the last packaged and user-tested reference. Current local source is v0.2.2 and is not packaged or published.
+- User reported persistence after closing/reopening NOVA Ink and restarting the local server; server outages were reported to show failures as intended.
+- Desktop ChatGPT web has a functional conversation side panel. Native iPad ChatGPT does not provide dependable simultaneous drawing and conversation.
+- Native tldraw toolbar is in the top panel in this source; Pencil and touch need iPad verification.
+- Backup listing and restore are implemented. Restore creates a new revision; a corrupt current file is copied under recovery/ first.
+- Unit tests cover lease acquisition/expiry, conflict handling, backup restore, corrupt records, and retention. They do not prove live multi-client or iPad behavior.
+- On October 29, npm test passed 24 tests and npm run build:host-test completed in development mode. Repeat after code changes.
+- Actual notebook data is outside Git at %LOCALAPPDATA%\NOVA-Ink\data. Do not inspect or alter it during routine development.
 
-## Suggested next task
-Establish a safe Git baseline and verify the current repository, tests, storage behavior, and known limits. Then propose a small implementation sequence for top-mounted toolbar and PDF imports. Ask before destructive actions or publication.
+## Next work
+With the user and disposable test canvases:
+1. Verify lease handoff between two independent clients and that an expired editor cannot save.
+2. Restore an earlier valid backup through Host tools → Backups and confirm a new revision.
+3. Verify toolbar, Pencil, finger pan/zoom, persistence, and canvas switching on iPad.
+
+Do not intentionally corrupt real data. After acceptance, prioritize PDF page import with source provenance and page-associated annotations. Do not publish or redeploy without explicit authorization.

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useApp } from '@modelcontextprotocol/ext-apps/react'
 import type { App, McpUiHostContext } from '@modelcontextprotocol/ext-apps'
-import { getSnapshot, Tldraw } from 'tldraw'
+import { DefaultToolbar, getSnapshot, Tldraw } from 'tldraw'
 import type { Editor, TLEditorSnapshot } from 'tldraw'
 import { intersectsViewport, makeCanvasContext } from './context'
 import 'tldraw/tldraw.css'
@@ -11,10 +11,14 @@ import './styles.css'
 type Mode = 'inline' | 'fullscreen'
 type CanvasMeta = { id: string; name: string; createdAt: string; updatedAt: string }
 type OpenedCanvas = { canvas: CanvasMeta; revision: number; snapshot: TLEditorSnapshot | null; readOnly: boolean }
-type ApiData = { ok: boolean; code?: string; message?: string; revision?: number; readOnly?: boolean; savedAt?: string; canvas?: CanvasMeta; canvases?: CanvasMeta[]; lastOpenedId?: string; snapshot?: TLEditorSnapshot | null }
+type ApiData = { ok: boolean; code?: string; message?: string; revision?: number; readOnly?: boolean; savedAt?: string; restoredRevision?: number; recoveryCopyPreserved?: boolean; backups?: Array<{ revision: number }>; canvas?: CanvasMeta; canvases?: CanvasMeta[]; lastOpenedId?: string; snapshot?: TLEditorSnapshot | null }
 type SaveLabel = 'Loading' | 'Saved' | 'Saving' | 'Not synced' | 'Read only'
 
 const clientId = crypto.randomUUID()
+const tldrawComponents = {
+  Toolbar: null,
+  TopPanel: () => <DefaultToolbar orientation="horizontal" />,
+}
 function useServerApi(app: App | null) {
   return async (name: string, args: Record<string, unknown>): Promise<ApiData> => {
     if (!app) throw new Error('The ChatGPT host is not connected.')
@@ -45,6 +49,11 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
   const [localCount, setLocalCount] = useState(0)
   const [modeBusy, setModeBusy] = useState(false)
   const [showDiagnostic, setShowDiagnostic] = useState(false)
+  const [backupPanelCanvasId, setBackupPanelCanvasId] = useState<string | null>(null)
+  const [recoveryCanvasId, setRecoveryCanvasId] = useState<string | null>(null)
+  const [backups, setBackups] = useState<Array<{ revision: number }>>([])
+  const [backupsLoading, setBackupsLoading] = useState(false)
+  const [restoringRevision, setRestoringRevision] = useState<number | null>(null)
   const [askOpen, setAskOpen] = useState(false)
   const [question, setQuestion] = useState('Am I approaching this problem correctly?')
   const safeTop = host?.safeAreaInsets?.top ?? 0
@@ -117,6 +126,19 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
     timerRef.current = setTimeout(() => { void saveAll() }, 650)
   }
 
+  const loadBackups = async (canvasId: string) => {
+    setBackupPanelCanvasId(canvasId)
+    setBackupsLoading(true)
+    try {
+      const result = await api('ink_list_backups', { canvasId })
+      if (!result.ok) throw new Error(result.message || 'Could not read saved backups')
+      setBackups(result.backups ?? [])
+    } catch (error) {
+      setBackups([])
+      setStatus(`Could not list saved backups: ${String(error)}`)
+    } finally { setBackupsLoading(false) }
+  }
+
   const openCanvas = async (id: string) => {
     if (busyRef.current) return
     busyRef.current = true
@@ -125,9 +147,26 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
       const old = currentRef.current
       if (old && old.canvas.id !== id) {
         if (!await saveAll()) { markNotSynced('Cannot switch canvases until the current canvas is saved.'); return }
-        if (!old.readOnly) await api('ink_release_editor', { canvasId: old.canvas.id, clientId })
+        if (!old.readOnly) {
+          await api('ink_release_editor', { canvasId: old.canvas.id, clientId })
+          old.readOnly = true
+          editorRef.current?.updateInstanceState({ isReadonly: true })
+          setOpened({ ...old })
+        }
       }
       const data = await api('ink_open_canvas', { canvasId: id, clientId })
+      if (!data.ok && data.code === 'CORRUPT_RECORD') {
+        setRecoveryCanvasId(id)
+        if (currentRef.current?.canvas.id === id) {
+          currentRef.current.readOnly = true
+          editorRef.current?.updateInstanceState({ isReadonly: true })
+          setOpened({ ...currentRef.current })
+        }
+        setSaveLabel('Not synced')
+        setStatus(data.message || 'This canvas file is damaged. Choose a valid backup to restore it.')
+        await loadBackups(id)
+        return
+      }
       if (!data.ok || !data.canvas || typeof data.revision !== 'number') throw new Error(data.message || 'Failed to open canvas')
       const next: OpenedCanvas = { canvas: data.canvas, revision: data.revision, snapshot: data.snapshot ?? null, readOnly: !!data.readOnly }
       editorRef.current = null
@@ -140,6 +179,9 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
       setSaveLabel(next.readOnly ? 'Read only' : 'Saved')
       setStatus(next.readOnly ? 'Another device is editing this canvas. Viewing server-saved state.' : `Loaded server revision ${data.revision}.`)
       setLibraryVisible(false)
+      setRecoveryCanvasId(null)
+      setBackupPanelCanvasId(null)
+      setBackups([])
     } catch (e) { markNotSynced(`Open failed: ${String(e)}`) }
     finally { setLoading(false); busyRef.current = false }
   }
@@ -248,6 +290,35 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
     } catch (e) { setStatus(`Retry failed: ${String(e)}`) }
   }
 
+  const restoreBackup = async (backupRevision: number) => {
+    const canvasId = backupPanelCanvasId
+    if (!canvasId || restoringRevision !== null) return
+    const isCorrupt = recoveryCanvasId === canvasId
+    const isOpenHere = opened?.canvas.id === canvasId
+    if (!isCorrupt && !isOpenHere) return
+    if (isOpenHere && dirtyRef.current) {
+      if (isCorrupt) {
+        markNotSynced('This canvas has unsaved local changes and a damaged server record. Keep it open; backup restore is paused so those local changes are not discarded.')
+        return
+      }
+      if (!await saveAll()) return
+    }
+    setRestoringRevision(backupRevision)
+    setStatus(`Restoring saved revision ${backupRevision}…`)
+    try {
+      const result = await api('ink_restore_backup', {
+        canvasId, clientId, backupRevision,
+        expectedCurrentRevision: isCorrupt ? null : revisionRef.current,
+      })
+      if (!result.ok || typeof result.revision !== 'number') throw new Error(result.message || 'Backup restore failed')
+      setStatus(`Restored saved revision ${backupRevision} as new revision ${result.revision}.${result.recoveryCopyPreserved ? ' The damaged file was kept in local recovery.' : ''}`)
+      setBackupPanelCanvasId(null)
+      setBackups([])
+      await openCanvas(canvasId)
+    } catch (error) { markNotSynced(`Backup restore failed: ${String(error)}`) }
+    finally { setRestoringRevision(null) }
+  }
+
   const ask = async () => {
     if (!app || !editorRef.current) return setStatus('Notebook or ChatGPT host unavailable.')
     const editor = editorRef.current
@@ -301,7 +372,7 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
   return <div className="ink-app" style={{ paddingTop: safeTop, paddingBottom: safeBottom }}>
     <header className="topbar">
       <div className="logo">N</div>
-      <div className="title"><strong>NOVA Ink</strong><span>{opened?.canvas.name || 'Private notebook'} · v0.2.1</span></div>
+      <div className="title"><strong>NOVA Ink</strong><span>{opened?.canvas.name || 'Private notebook'} · v0.2.2</span></div>
       <div className="grow" />
       <button className="secondary" onClick={() => { setLibraryVisible(x => !x); void refreshLibrary() }}>Canvases</button>
       <span className={`save-indicator ${saveLabel === 'Saved' ? 'saved' : saveLabel === 'Not synced' ? 'unsynced' : ''}`}>{saveLabel}</span>
@@ -314,12 +385,17 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
       <div className="create-row"><input value={newName} maxLength={80} placeholder="New canvas name" onChange={e => setNewName(e.target.value)} /><button onClick={() => void createCanvas()} disabled={!newName.trim()}>Create</button></div>
       <p>Canvases are stored in the server's local data directory, not this ChatGPT conversation.</p>
     </section>}
-    {showDiagnostic && <aside className="diagnostic"><p>Host: {host?.displayMode || 'unknown'} · Available: {(host?.availableDisplayModes || []).join(', ')}</p><div className="diag-actions"><button disabled={!app || modeBusy} onClick={() => void requestMode('fullscreen')}>Fullscreen</button><button disabled={!app || modeBusy} onClick={() => void requestMode('inline')}>Inline</button><button disabled={!opened || opened.readOnly} onClick={() => void releaseEditor()}>Release editing</button><button disabled={!opened} onClick={() => void retryEdit()}>Refresh / request editing</button></div></aside>}
+    {showDiagnostic && <aside className="diagnostic"><p>Host: {host?.displayMode || 'unknown'} · Available: {(host?.availableDisplayModes || []).join(', ')}</p><div className="diag-actions"><button disabled={!app || modeBusy} onClick={() => void requestMode('fullscreen')}>Fullscreen</button><button disabled={!app || modeBusy} onClick={() => void requestMode('inline')}>Inline</button><button disabled={!opened || opened.readOnly} onClick={() => void releaseEditor()}>Release editing</button><button disabled={!opened} onClick={() => void retryEdit()}>Refresh / request editing</button><button disabled={!opened && !recoveryCanvasId} onClick={() => void loadBackups(recoveryCanvasId || opened!.canvas.id)}>Backups…</button></div></aside>}
     {askOpen && <section className="ask-panel"><div className="ask-top"><strong>Ask NOVA</strong><button onClick={() => setAskOpen(false)}>Close</button></div><label htmlFor="ink-question">What would you like help with?</label><textarea id="ink-question" value={question} onChange={e => setQuestion(e.target.value)} maxLength={1200} rows={2}/><div className="help-choice"><span>● Chat hint</span><span className="inactive">○ Annotate canvas — planned</span></div><p>ChatGPT receives the selected shapes or current viewport only. You stay in control of when to request help.</p><button className="primary" onClick={() => void ask()} disabled={!app || !question.trim()}>Send to ChatGPT</button></section>}
     {opened && opened.readOnly && <div className="read-only-bar">Another editor may hold this canvas. <button onClick={() => void retryEdit()}>Refresh / request editing</button></div>}
+    {backupPanelCanvasId && <section className="backup-panel" aria-label="Saved canvas backups">
+      <div className="library-title"><strong>{recoveryCanvasId === backupPanelCanvasId ? 'Recover damaged canvas' : 'Saved backups'}</strong><button className="secondary" onClick={() => setBackupPanelCanvasId(null)}>Close</button></div>
+      <p>{recoveryCanvasId === backupPanelCanvasId ? 'Choose a verified saved revision. The damaged current file will be preserved in the server’s local recovery folder.' : 'Restoring makes a new revision and keeps the current saved revision among the local backups.'}</p>
+      {backupsLoading ? <span>Reading backups…</span> : backups.length === 0 ? <span>No valid saved backups are available.</span> : <div className="backup-items">{backups.map(item => <button key={item.revision} disabled={restoringRevision !== null || (!!opened?.readOnly && recoveryCanvasId !== backupPanelCanvasId)} onClick={() => void restoreBackup(item.revision)}>Restore revision {item.revision}</button>)}</div>}
+    </section>}
     <div className="canvas-area">
       {!opened ? <div className="canvas-loading">{loading ? 'Loading your last canvas…' : 'Notebook unavailable. Check the status below.'}</div> :
-        <Tldraw key={`${opened.canvas.id}-${instanceEpoch}`} snapshot={opened.snapshot ?? undefined} onMount={onMount} />}
+        <Tldraw key={`${opened.canvas.id}-${instanceEpoch}`} snapshot={opened.snapshot ?? undefined} onMount={onMount} components={tldrawComponents} />}
     </div>
     <footer className="footnote"><span>{localCount} shapes · <button className="footer-tool" onClick={() => setShowDiagnostic(v => !v)}>Host tools</button></span><span role="status" title={status}>{status}</span></footer>
   </div>
@@ -328,7 +404,7 @@ function InkWorkspace({ app, host }: { app: App | null; host: McpUiHostContext |
 function Root() {
   const [host, setHost] = useState<McpUiHostContext | undefined>()
   const { app, error } = useApp({
-    appInfo: { name: 'NOVA Ink', version: '0.2.1' }, capabilities: {},
+    appInfo: { name: 'NOVA Ink', version: '0.2.2' }, capabilities: {},
     onAppCreated(instance) {
       instance.onhostcontextchanged = update => setHost(current => ({ ...current, ...update }))
       instance.onerror = e => console.error('NOVA Ink MCP error', e)
