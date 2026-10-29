@@ -16,7 +16,7 @@
     { "tag": "v2", "new_sqlite_classes": ["LibraryDO"] }
   ],
   // OAUTH_KV: created with `npx wrangler kv namespace create OAUTH_KV`; its id goes here (an id is not a secret).
-  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "1fd7d147353e4718a9f7a7388fa1ef2c" }],
   // Not a secret. Empty until the first deploy tells us the workers.dev URL; while empty the Worker fails closed.
   "vars": { "PUBLIC_ORIGIN": "" }
 }
