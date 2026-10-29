@@ -1,0 +1,25 @@
+{
+  "name": "nova-ink-cloudflare-spike",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@cloudflare/workers-types": "^5.20261029.1",
+    "miniflare": "^5.20261023.3-beta",
+    "miniflare4": "npm:miniflare@^4.20260730.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tldraw": "^5.6.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.156.0"
+  },
+  "scripts": {
+    "fixtures": "node scripts/gen-fixtures.mjs",
+    "test": "vitest run --test-timeout=60000",
+    "typecheck": "tsc --noEmit",
+    "test:node": "node --test --test-force-exit --test-timeout=300000 test/node/*.test.mjs",
+    "bench": "node scripts/bench.mjs"
+  }
+}

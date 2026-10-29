@@ -1,0 +1,7 @@
+{
+  "name": "nova-ink-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "durable_objects": { "bindings": [{ "name": "CANVAS", "class_name": "CanvasDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CanvasDO"] }]
+}
