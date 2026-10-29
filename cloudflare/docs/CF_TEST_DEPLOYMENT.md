@@ -173,6 +173,8 @@ Check 3, large saves through ChatGPT (materialized `img3mb` / `img8mb` canvases,
 
 The generated "images" are random bytes, not decodable PNGs, so the widget draws a broken-image icon; that is the test data, not a bug. Dropping real images into the widget fails with tldraw's "Upload failed" toast for every file under the widget's own 8 MiB cap (`MAX_ASSET_BYTES` in `src/main.tsx`, files over it get a "max 8 MiB" message); no request reached the Worker. Cause not established (possible ChatGPT-sandbox / CSP issue); not tested on the Windows server connector. Largest save that went through: 10.19 MiB. The Worker's own body cap is 16 MiB; the ChatGPT-side ceiling above 10.19 MiB is unknown.
 
+Decision (Oct 29, 2026, user): the "Upload failed" on dropped images is taken as tldraw / widget behaviour, not Cloudflare. This is the user's working conclusion; it was NOT tested on the Windows server connector and the exact cause is unconfirmed. The test deployment stays up (fully running) until the refresh test (check 2, after 1 h and next day) is done; take-down commands are in section 6.
+
 Not yet measured: the largest save from the widget with images (check 3, request direction), refresh after 1 h and next day (check 2), and browser-side cost. The user confirmed the widget showed "Saved" after the s1500 edit. For check 3 images, `node scripts/make-test-images.mjs` writes incompressible noise PNGs (3, 6, 9, 11 MiB) to `%TEMP%\nova-test-images`.
 
 ### Results table (fill in)
