@@ -79,7 +79,7 @@ Checked against the Cloudflare One docs page "Generic OIDC application" (updated
 4. **Scopes**: keep `openid`, `email`, `profile`. (`email` is required; the Worker refuses a token without it.)
 5. **Redirect URLs**: `https://nova-ink-test.<your-subdomain>.workers.dev/callback` (exactly; no trailing slash).
 6. **PKCE**: turn it on (the Worker always sends a PKCE challenge, so either setting works).
-7. **Refresh tokens**: turn on, if the toggle is shown. Note for check 2: ChatGPT's refresh uses refresh tokens issued by *this Worker*, not by Access, so this setting does not decide whether ChatGPT stays connected. It only matters if we later make the Worker re-check Access on refresh.
+7. **Refresh tokens**: no toggle exists in the current dashboard and none is needed. Note for check 2: ChatGPT's refresh uses refresh tokens issued by *this Worker*, not by Access, so this setting does not decide whether ChatGPT stays connected. It only matters if we later make the Worker re-check Access on refresh.
 8. **OIDC flows**: leave on "No additional OIDC flows" (refresh tokens are not supported with hybrid/implicit flows).
 9. **Access policies**: add your existing "only my email" policy. **Identity providers**: One-time PIN only.
 10. **Create**. Copy: Client ID, Client secret, Token endpoint, Authorization endpoint, Key endpoint. Keep them out of chat, files and commits.
@@ -110,6 +110,17 @@ npx wrangler secret list
    - **Check 3, payload limits.** In the widget, on a DIAG canvas, paste/drag in images of about 1, 3, 6, 9 and 11 MB and watch the status; record the largest that reaches **Saved** and the exact text of the first "Not synced"/error. The tail "tool" rows show `bytesIn` for each save. Also ask ChatGPT: "Call nova_ink_diag_payload with respondBytes 1000000", then 4000000, 8000000, 12000000.
    Record results in the table below.
 4. **Take it down if the results say no** (section 6).
+
+### Reported results (Oct 29, 2026, from the user, transcribed as given)
+
+Run through ChatGPT against the real deployment. **Unit and metric (CPU vs wall, ms assumed) were not stated with the numbers and are still to be confirmed.** Only s100, s500 and s1500 were reported; s3000, the image sizes, check 2 beyond first sign-in, and check 3 have no recorded numbers yet. "Everything else passed" is the user's summary, not a measurement.
+
+| Step | s100 | s500 | s1500 |
+|---|---|---|---|
+| Initial save | 75 | 153 | 330 |
+| Open | 17 | 29 | 52 |
+| Steady-state edit | 35 | 31 | 32 |
+| Forced checkpoint | 38 | 51 | 75 |
 
 ### Results table (fill in)
 
