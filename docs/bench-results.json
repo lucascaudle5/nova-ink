@@ -1,0 +1,270 @@
+{
+  "generatedAt": "2026-10-29T19:57:49.000Z",
+  "node": "v24.21.0",
+  "rows": [
+    {
+      "operation": "full save, s100 (0.13 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 25,
+      "wallMsPerOp": 43.4,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 106
+    },
+    {
+      "operation": "load (open), s100 (0.13 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 10.9,
+      "wallMsPerOp": 12.7,
+      "rowsReadPerOp": 105,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), s100 (0.13 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 7.8,
+      "wallMsPerOp": 10.3,
+      "rowsReadPerOp": 105,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), s100 (0.13 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 10.4,
+      "wallMsPerOp": 12.8,
+      "rowsReadPerOp": 4,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), s100 (0.13 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 15.6,
+      "wallMsPerOp": 28.2,
+      "rowsReadPerOp": 437,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "full save, s500 (0.65 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 62.5,
+      "wallMsPerOp": 80.4,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 506
+    },
+    {
+      "operation": "load (open), s500 (0.65 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 50,
+      "wallMsPerOp": 58.4,
+      "rowsReadPerOp": 505,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), s500 (0.65 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 37.5,
+      "wallMsPerOp": 45.6,
+      "rowsReadPerOp": 505,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), s500 (0.65 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 41.7,
+      "wallMsPerOp": 54.7,
+      "rowsReadPerOp": 4,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), s500 (0.65 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 125,
+      "wallMsPerOp": 116.4,
+      "rowsReadPerOp": 2037,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "full save, s1500 (1.95 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 240.6,
+      "wallMsPerOp": 255.6,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 1506
+    },
+    {
+      "operation": "load (open), s1500 (1.95 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 142.2,
+      "wallMsPerOp": 154.9,
+      "rowsReadPerOp": 1505,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), s1500 (1.95 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 137.5,
+      "wallMsPerOp": 154.9,
+      "rowsReadPerOp": 1505,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), s1500 (1.95 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 140.6,
+      "wallMsPerOp": 149.7,
+      "rowsReadPerOp": 4,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), s1500 (1.95 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 421.9,
+      "wallMsPerOp": 430.6,
+      "rowsReadPerOp": 6037,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "full save, s3000 (3.89 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 553.1,
+      "wallMsPerOp": 601.6,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 3006
+    },
+    {
+      "operation": "load (open), s3000 (3.89 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 320.3,
+      "wallMsPerOp": 348.5,
+      "rowsReadPerOp": 3005,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), s3000 (3.89 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 276.6,
+      "wallMsPerOp": 301.4,
+      "rowsReadPerOp": 3005,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), s3000 (3.89 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 307.3,
+      "wallMsPerOp": 346.9,
+      "rowsReadPerOp": 4,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), s3000 (3.89 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 974,
+      "wallMsPerOp": 1029.4,
+      "rowsReadPerOp": 12037,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "full save, img3mb (2.87 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 87.5,
+      "wallMsPerOp": 117.7,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 18
+    },
+    {
+      "operation": "load (open), img3mb (2.87 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 40.6,
+      "wallMsPerOp": 65.1,
+      "rowsReadPerOp": 17,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), img3mb (2.87 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 45.3,
+      "wallMsPerOp": 67.6,
+      "rowsReadPerOp": 17,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), img3mb (2.87 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 46.9,
+      "wallMsPerOp": 55.7,
+      "rowsReadPerOp": 5,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), img3mb (2.87 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 109.4,
+      "wallMsPerOp": 98.6,
+      "rowsReadPerOp": 71,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "full save, img8mb (7.64 MiB JSON)",
+      "n": 5,
+      "cpuMsPerOp": 268.8,
+      "wallMsPerOp": 323.2,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 23
+    },
+    {
+      "operation": "load (open), img8mb (7.64 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 157.8,
+      "wallMsPerOp": 227.1,
+      "rowsReadPerOp": 22,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "load (openRaw), img8mb (7.64 MiB JSON)",
+      "n": 10,
+      "cpuMsPerOp": 151.6,
+      "wallMsPerOp": 232.2,
+      "rowsReadPerOp": 22,
+      "rowsWrittenPerOp": 0
+    },
+    {
+      "operation": "checkpoint write proxy (importCheckpoint), img8mb (7.64 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 114.6,
+      "wallMsPerOp": 154.9,
+      "rowsReadPerOp": 5,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "restore checkpoint (gunzip+diff, no changes), img8mb (7.64 MiB JSON)",
+      "n": 3,
+      "cpuMsPerOp": 171.9,
+      "wallMsPerOp": 232.4,
+      "rowsReadPerOp": 76,
+      "rowsWrittenPerOp": 3
+    },
+    {
+      "operation": "typical save: +3 strokes on 1,500-stroke canvas",
+      "n": 30,
+      "cpuMsPerOp": 4.7,
+      "wallMsPerOp": 34.5,
+      "rowsReadPerOp": 3,
+      "rowsWrittenPerOp": 4
+    },
+    {
+      "operation": "camera-only save on 1,500-stroke canvas",
+      "n": 30,
+      "cpuMsPerOp": 5.7,
+      "wallMsPerOp": 35.8,
+      "rowsReadPerOp": 4,
+      "rowsWrittenPerOp": 2
+    },
+    {
+      "operation": "heartbeat",
+      "n": 30,
+      "cpuMsPerOp": 3.1,
+      "wallMsPerOp": 4.6,
+      "rowsReadPerOp": 0,
+      "rowsWrittenPerOp": 0
+    }
+  ]
+}
