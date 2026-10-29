@@ -162,7 +162,7 @@ Real Worker tool calls from the widget (CPU includes the Worker's own JSON work;
 
 Every real widget call except heartbeat used more than 10 ms of Worker CPU, up to 58 ms, and none returned an error or `exceededCpu`. So 10 ms per request is not being enforced hard here, but Cloudflare says sustained overage gets terminated, so this stays a risk. Whole-snapshot saves also ship the entire canvas on every save (1.90 MiB at s1500), which is a v0.2-contract cost, not a Durable Object cost.
 
-Not yet measured: the largest save from the widget with images (check 3, request direction), refresh after 1 h and next day (check 2), and browser-side cost. Whether the widget showed "Saved" is the user's observation, not confirmed here.
+Not yet measured: the largest save from the widget with images (check 3, request direction), refresh after 1 h and next day (check 2), and browser-side cost. The user confirmed the widget showed "Saved" after the s1500 edit. For check 3 images, `node scripts/make-test-images.mjs` writes incompressible noise PNGs (3, 6, 9, 11 MiB) to `%TEMP%\nova-test-images`.
 
 ### Results table (fill in)
 
