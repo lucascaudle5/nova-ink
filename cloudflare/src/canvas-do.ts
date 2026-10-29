@@ -13,6 +13,7 @@
  */
 import { DurableObject } from 'cloudflare:workers'
 import type { ApiResult, Changes, CheckpointInfo, SaveRequest, Snapshot, TLRecord } from './protocol'
+import { lateIndexKey, makeDiagSnapshot, movedSession, strokeRecord, type DiagSnapshot } from './diag-data'
 
 export interface Env { CANVAS: DurableObjectNamespace<CanvasDO> }
 
@@ -88,6 +89,7 @@ export class CanvasDO extends DurableObject<Env> {
   private sql: Sql
   private tail: Promise<unknown> = Promise.resolve()
   private lease: Lease | null | undefined = undefined
+  private diagSnap: DiagSnapshot | null = null
   private rowsWritten = 0
   private rowsRead = 0
 
@@ -316,7 +318,31 @@ export class CanvasDO extends DurableObject<Env> {
   }
 
   save(req: SaveRequest): Promise<ApiResult> {
-    return this.serialize(async () => {
+    return this.serialize(() => this.saveChecked(req, false))
+  }
+
+  /**
+   * Save a WHOLE snapshot (the v0.2 widget contract): every record in the snapshot is put (unchanged rows are
+   * skipped by commit's effective-change-set), and records not in the snapshot are removed. All the usual checks
+   * (replay, lease, revision) run first, in the same order as save().
+   */
+  saveSnapshot(req: { clientId: string; saveId: string; baseRevision: number; snapshot: unknown }): Promise<ApiResult> {
+    return this.serialize(() => {
+      if (!hasSnapshotShape(req?.snapshot)) {
+        this.begin()
+        return fail('INVALID_SNAPSHOT', 'Expected a tldraw snapshot with document and session. Nothing was saved.')
+      }
+      const snap = req.snapshot
+      return this.saveChecked({
+        clientId: req.clientId, saveId: req.saveId, baseRevision: req.baseRevision,
+        puts: Object.values(snap.document.store), schema: snap.document.schema, session: snap.session,
+      }, true)
+    })
+  }
+
+  /** Shared body of save()/saveSnapshot(). `whole`: removes = every stored record the request does not put. */
+  private async saveChecked(req: SaveRequest, whole: boolean): Promise<ApiResult> {
+    {
       this.begin()
       const bad = this.checkClient(req?.clientId)
       if (bad) return bad
@@ -335,8 +361,13 @@ export class CanvasDO extends DurableObject<Env> {
         })
       }
       if (!isSaveId(req.saveId)) return fail('INVALID_REQUEST', 'Missing save id.')
+      if (whole) {
+        const keep = new Set((req.puts ?? []).map(r => r?.id))
+        const removes = this.run<{ id: string }>('SELECT id FROM records').map(r => r.id).filter(id => !keep.has(id))
+        return this.commit(head, req.clientId, req.saveId, { ...req, removes })
+      }
       return this.commit(head, req.clientId, req.saveId, req)
-    })
+    }
   }
 
   /** Creates this (fresh) canvas from a whole snapshot. Retrying the same saveId is safe. */
@@ -675,5 +706,79 @@ export class CanvasDO extends DurableObject<Env> {
       this.run("INSERT OR REPLACE INTO quarantine (at, source, id, json) SELECT ?, 'records', id, json FROM records", at)
       this.run("INSERT OR REPLACE INTO quarantine (at, source, id, json) SELECT ?, 'kv', key, value FROM kv WHERE key != 'lease'", at)
     })
+  }
+
+  // ---------------------------------------------------------------- diagnostics (generated data only)
+
+  /**
+   * One measured step of the go/no-go diagnostics. Each call is its own Durable Object invocation, so `wrangler tail`
+   * reports a separate cpuTime/wallTime for it; the console.log line lets tools/tail-report.mjs match the two.
+   * SAFETY: only runs on a canvas that is empty (never saved) or already marked as diagnostic, and `purge` only
+   * deletes a marked canvas. A real canvas can therefore never be generated over, saved to, or deleted by this.
+   */
+  async diagOp(a: { op: string; label?: string; run: string; size: string; strokes?: number; imageBytes?: number }): Promise<Record<string, any>> {
+    const clientId = '00000000-0000-4000-8000-0000000000d1'
+    const known = ['generate', 'fullSave', 'open', 'openRaw', 'incrementalSave', 'cameraSave', 'checkpoint', 'heartbeat', 'purge']
+    if (!known.includes(a?.op)) return fail('INVALID_REQUEST', 'Unknown diagnostic step.')
+    const marked = await this.serialize(() => {
+      this.begin()
+      if (this.kvGet('diag') === '1') return true
+      const state = this.readHead()
+      if ('error' in state || state.head || this.missingHead(undefined)) return false
+      this.kvPut('diag', '1')
+      return true
+    })
+    if (marked !== true) return fail('NOT_DIAGNOSTIC', 'Refusing: this canvas is not a generated diagnostic canvas.')
+    console.log(JSON.stringify({ diag: 1, run: a.run, size: a.size, op: a.label ?? a.op }))
+
+    const strip = (r: ApiResult) => ({ ok: r.ok, ...(r.code ? { code: r.code, message: r.message } : {}), revision: r.revision, stats: r.stats })
+    const revision = () => { const s = this.readHead(); return 'head' in s && s.head ? s.head.revision : 0 }
+    const spec = { strokes: a.strokes ?? 0, imageBytes: a.imageBytes }
+    switch (a.op) {
+      case 'generate':
+        this.diagSnap = makeDiagSnapshot(spec)
+        return { ok: true, records: Object.keys(this.diagSnap.document.store).length }
+      case 'fullSave': {
+        const snapshot = this.diagSnap ?? makeDiagSnapshot(spec)
+        return strip(await this.saveSnapshot({ clientId, saveId: `diag-${a.run}-full`.slice(0, 64), baseRevision: revision(), snapshot }))
+      }
+      case 'open': {
+        const r = await this.open({ clientId })
+        return { ...strip(r), records: r.snapshot ? Object.keys(r.snapshot.document.store).length : 0 } // the snapshot itself stays here
+      }
+      case 'openRaw': {
+        const text = await this.openRaw({ clientId })
+        return { ok: text.startsWith('{"ok":true'), bytes: text.length }
+      }
+      case 'incrementalSave': {
+        const base = revision()
+        const puts = [0, 1, 2].map(i => { const n = base * 10 + i; const p = strokeRecord(n, 120, 'x', lateIndexKey(n)); p.x = 900 + i * 30; p.y = 900; return p })
+        return strip(await this.save({ clientId, saveId: `diag-${a.run}-inc${base}`.slice(0, 64), baseRevision: base, puts, session: movedSession(this.diagSnap?.session ?? makeDiagSnapshot({ strokes: 0 }).session, base) }))
+      }
+      case 'cameraSave': {
+        const base = revision()
+        return strip(await this.save({ clientId, saveId: `diag-${a.run}-cam${base}`.slice(0, 64), baseRevision: base, session: movedSession(makeDiagSnapshot({ strokes: 0 }).session, base + 7) }))
+      }
+      case 'checkpoint':
+        return this.serialize(async () => {
+          this.begin()
+          const state = this.readHead()
+          if ('error' in state || !state.head) return fail('NOT_FOUND', 'Nothing to checkpoint.')
+          await this.writeCheckpoint(state.head)
+          return { ok: true, stats: this.stats() }
+        })
+      case 'heartbeat':
+        return strip(await this.heartbeat({ clientId }))
+      case 'purge':
+        return this.serialize(async () => {
+          if (this.kvGet('diag') !== '1') return fail('NOT_DIAGNOSTIC', 'Refusing to delete a canvas that is not a generated diagnostic canvas.')
+          await this.ctx.storage.deleteAll()
+          this.lease = undefined
+          this.diagSnap = null
+          this.migrate()
+          return { ok: true }
+        })
+    }
+    return fail('INVALID_REQUEST', 'Unknown diagnostic step.')
   }
 }
