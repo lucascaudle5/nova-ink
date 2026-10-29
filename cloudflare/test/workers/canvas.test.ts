@@ -1,6 +1,7 @@
-import { env, runInDurableObject, evictDurableObject, SELF } from 'cloudflare:test'
+import { env, runInDurableObject, evictDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { diffSnapshots } from '../../src/diff'
+import { canvasIdForSaveId } from '../../src/mcp'
 import type { Snapshot } from '../../src/protocol'
 import small from '../fixtures/small.json'
 import s100 from '../fixtures/s100.json'
@@ -380,16 +381,17 @@ describe('checkpoints and recovery', () => {
 })
 
 describe('save my version as a new canvas', () => {
-  it('is atomic and safe to retry through the Worker', async () => {
-    const body = JSON.stringify({ name: 'Copy', clientId: A, saveId: 'sa-1', snapshot: small })
-    const post = () => SELF.fetch('https://x/api/save-as-new', { method: 'POST', body }).then(r => r.json()) as Promise<any>
-    const first = await post()
-    expect(first).toMatchObject({ ok: true, revision: 1, canvas: { name: 'Copy' } })
-    const retry = await post()
-    expect(retry).toMatchObject({ ok: true, revision: 1, replayed: true, canvas: { id: first.canvas.id } })
-    const opened = await (await SELF.fetch(`https://x/api/canvas/${first.canvas.id}/open`, { method: 'POST', body: JSON.stringify({ clientId: A }) })).json() as any
-    expect(opened.snapshot).toEqual(small)
-    const bad = await (await SELF.fetch('https://x/api/save-as-new', { method: 'POST', body: JSON.stringify({ name: 'x', clientId: A, saveId: 'sa-2', snapshot: { nope: 1 } }) })).json() as any
+  // The unauthenticated /api routes of the first spike were removed (auth layer). The same contract is exercised
+  // against the Durable Object directly, the way the MCP tool ink_save_as_new_canvas calls it (see auth.test.ts for the tool).
+  it('is atomic and safe to retry (same saveId lands on the same canvas)', async () => {
+    const id = await canvasIdForSaveId('sa-1')
+    const stub = E.CANVAS.get(E.CANVAS.idFromName(id)) as any
+    const first = await stub.initFromSnapshot({ clientId: A, saveId: 'sa-1', snapshot: small })
+    expect(first).toMatchObject({ ok: true, revision: 1 })
+    const retry = await stub.initFromSnapshot({ clientId: A, saveId: 'sa-1', snapshot: small })
+    expect(retry).toMatchObject({ ok: true, revision: 1, replayed: true })
+    expect((await stub.open({ clientId: A })).snapshot).toEqual(small)
+    const bad = await E.CANVAS.get(E.CANVAS.idFromName(await canvasIdForSaveId('sa-2'))).initFromSnapshot({ clientId: A, saveId: 'sa-2', snapshot: { nope: 1 } })
     expect(bad).toMatchObject({ ok: false, code: 'INVALID_SNAPSHOT' })
   })
 })

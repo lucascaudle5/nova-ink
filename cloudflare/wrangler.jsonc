@@ -1,7 +1,22 @@
 {
-  "name": "nova-ink-spike",
+  // THROWAWAY TEST DEPLOYMENT. Delete with `npx wrangler delete` when the go/no-go checks are done.
+  "name": "nova-ink-test",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
-  "durable_objects": { "bindings": [{ "name": "CANVAS", "class_name": "CanvasDO" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CanvasDO"] }]
+  // global_fetch_strictly_public: required by the OAuth provider for Client ID Metadata Document clients (ChatGPT).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": { "bindings": [
+    { "name": "CANVAS", "class_name": "CanvasDO" },
+    { "name": "LIBRARY", "class_name": "LibraryDO" }
+  ] },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CanvasDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["LibraryDO"] }
+  ],
+  // OAUTH_KV: created with `npx wrangler kv namespace create OAUTH_KV`; its id goes here (an id is not a secret).
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  // Not a secret. Empty until the first deploy tells us the workers.dev URL; while empty the Worker fails closed.
+  "vars": { "PUBLIC_ORIGIN": "" }
 }

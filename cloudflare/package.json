@@ -17,9 +17,20 @@
   },
   "scripts": {
     "fixtures": "node scripts/gen-fixtures.mjs",
+    "widget": "node scripts/copy-widget.mjs",
+    "pretest": "node scripts/copy-widget.mjs --if-missing",
+    "pretypecheck": "node scripts/copy-widget.mjs --if-missing",
     "test": "vitest run --test-timeout=60000",
     "typecheck": "tsc --noEmit",
+    "tail-report": "node scripts/tail-report.mjs",
     "test:node": "node --test --test-force-exit --test-timeout=300000 test/node/*.test.mjs",
     "bench": "node scripts/bench.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.4",
+    "@modelcontextprotocol/ext-apps": "^2.0.4",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "jose": "^6.2.14",
+    "zod": "^4.6.7"
   }
 }

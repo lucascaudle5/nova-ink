@@ -3,4 +3,8 @@ dist
 .wrangler
 test/fixtures/*.json
 .tmp
-
+src/widget.generated.ts
+.dev.vars
+.dev.vars.*
+.env
+.env.*
