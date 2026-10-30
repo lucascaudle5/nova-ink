@@ -237,7 +237,9 @@ export function mountTools(surface: InkSurface, options: ToolsOptions): Tools {
     popover.hidden = false
     const left = rect.left + rect.width / 2 - popover.offsetWidth / 2
     popover.style.left = `${Math.max(8, Math.min(left, window.innerWidth - popover.offsetWidth - 8))}px`
-    popover.style.top = `${rect.bottom + 12}px`
+    // Below the button, or above it when there is no room (a button near the bottom of the screen).
+    const below = rect.bottom + 12
+    popover.style.top = `${below + popover.offsetHeight > window.innerHeight - 8 ? Math.max(8, rect.top - popover.offsetHeight - 12) : below}px`
   }
 
   function closePopover() { popover.hidden = true; popoverKey = null }

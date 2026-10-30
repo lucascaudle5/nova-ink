@@ -34,8 +34,11 @@
       <button data-tool="eraser" class="tool" title="Eraser (tap again for size and mode)" aria-label="Eraser" data-popover-anchor>
         <svg viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></svg>
       </button>
-      <button data-tool="select" class="tool" title="Select pictures: tap to select, drag to move, drag the corner to resize" aria-label="Select pictures">
+      <button data-tool="select" class="tool" title="Select: draw around ink or pictures, then move, resize, turn, copy or recolor them (tap again for loop or box)" aria-label="Select" data-popover-anchor>
         <svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-7.5L21 10z" /></svg>
+      </button>
+      <button data-tool="snip" class="tool" title="Snip: drag a rectangle over the part of the page you want to show NOVA" aria-label="Snip an area">
+        <svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M18 22V8a2 2 0 0 0-2-2H2" /></svg>
       </button>
       <span class="sep"></span>
       <button id="undo" title="Undo" aria-label="Undo">
@@ -61,6 +64,14 @@
       <span id="width-slots" class="slots" title="Tap a width to use it; tap it again to change it." data-popover-anchor></span>
       <div class="fly-label">Color</div>
       <span id="color-slots" class="slots" title="Tap a color to use it; tap it again to change it." data-popover-anchor></span>
+    </div>
+
+    <div id="select-flyout" class="pen-flyout panel" hidden role="group" aria-label="Selection shape">
+      <div class="fly-label">Select with</div>
+      <div class="segmented two" role="radiogroup" aria-label="Selection shape">
+        <button id="shape-loop" role="radio" data-shape="loop" title="Draw a loop around what you want">Loop</button>
+        <button id="shape-box" role="radio" data-shape="box" title="Drag a rectangle over what you want">Box</button>
+      </div>
     </div>
 
     <nav class="corner floating" aria-label="View">
@@ -106,11 +117,26 @@
     <aside id="pages" class="pages panel" hidden aria-label="Pages"></aside>
     <div id="menu" class="menu panel" hidden></div>
 
-    <div id="image-bar" class="image-bar floating" hidden>
-      <span id="image-label">Picture selected</span>
-      <button id="image-rotate" title="Turn a quarter clockwise (drag the round handle above the picture to turn it freely)">Turn 90°</button>
-      <button id="image-delete" class="danger">Delete</button>
-      <button id="image-done">Done</button>
+    <div id="selection-bar" class="selection-bar floating" hidden>
+      <span id="selection-label">Picture selected</span>
+      <button id="sel-turn" title="Turn a quarter clockwise (drag the round handle to turn it freely)">Turn 90°</button>
+      <button id="sel-duplicate" title="Make a copy of the selection">Copy</button>
+      <button id="sel-style" title="Change the color or width of the selected ink" data-popover-anchor>Color</button>
+      <button id="sel-ask" title="Ask NOVA about just the selection">Ask NOVA</button>
+      <button id="sel-delete" class="danger">Delete</button>
+      <button id="sel-done">Done</button>
+    </div>
+
+    <div id="snip-bar" class="snip-bar floating panel" hidden>
+      <div class="snip-title">Drag a rectangle over the part you want ChatGPT to see</div>
+      <div id="snip-levels" class="segmented" role="radiogroup" aria-label="Help level"></div>
+      <div id="snip-note" class="snip-note"></div>
+      <div class="snip-actions">
+        <button id="snip-whole" title="Cover everything on the page">Whole page</button>
+        <button id="snip-cancel">Cancel</button>
+        <button id="snip-send" class="primary">Send to NOVA</button>
+      </div>
+      <div id="snip-result" class="ask-result" aria-live="polite"></div>
     </div>
 
     <footer class="status" aria-live="polite">

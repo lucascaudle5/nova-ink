@@ -71,6 +71,48 @@ export class History {
     return !!before
   }
 
+  /**
+   * Swaps strokes and pictures for new versions, one for one and each in its old place in the stacking order, as one
+   * undo step: move, resize, turn or restyle a selection. Unknown ids are skipped. Returns how many were replaced.
+   */
+  replaceItems(strokes: ReadonlyArray<readonly [string, Stroke]>, images: ReadonlyArray<readonly [string, ImageItem]>): number {
+    const commands: Command[] = []
+    for (const [id, next] of strokes) {
+      const removed = this.doc.replace(id, [next])
+      if (removed) commands.push({ kind: 'replace', removed, pieces: [next] })
+    }
+    for (const [id, next] of images) {
+      const before = this.doc.replaceImage(id, next)
+      if (before) commands.push({ kind: 'image', before, after: next })
+    }
+    this.recordAll(commands)
+    return commands.length
+  }
+
+  /** Removes strokes and pictures as one undo step. Returns how many were removed. */
+  deleteItems(strokeIds: Iterable<string>, imageIds: Iterable<string>): number {
+    const commands: Command[] = []
+    const entries = this.doc.remove(strokeIds)
+    if (entries.length) commands.push({ kind: 'remove', entries })
+    for (const id of imageIds) {
+      const before = this.doc.removeImage(id)
+      if (before) commands.push({ kind: 'image', before, after: null })
+    }
+    this.recordAll(commands)
+    return entries.length + commands.length - (entries.length ? 1 : 0)
+  }
+
+  /** Adds strokes and pictures (on top) as one undo step: a duplicate. */
+  addItems(strokes: readonly Stroke[], images: readonly ImageItem[]): void {
+    const commands: Command[] = []
+    if (strokes.length) { this.doc.addMany(strokes); commands.push({ kind: 'add', strokes: [...strokes] }) }
+    for (const after of images) { this.doc.addImage(after); commands.push({ kind: 'image', before: null, after }) }
+    this.recordAll(commands)
+  }
+
+  private recordAll(commands: Command[]) {
+    if (commands.length) this.record(commands.length === 1 ? commands[0] : { kind: 'group', commands })
+  }
   /** Everything until endGroup() becomes one undo step (one eraser gesture). */
   beginGroup(): void { if (!this.group) this.group = [] }
 

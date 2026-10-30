@@ -11,11 +11,14 @@ export const HELP_LEVELS: Record<HelpLevel, { label: string; instruction: string
 }
 export const HELP_ORDER: readonly HelpLevel[] = ['nudge', 'concept', 'next', 'check']
 
-/** What the picture covers: what is on screen now, or the whole page fitted to its content. */
-export type AskScope = 'screen' | 'page'
+/**
+ * What the picture covers: what is on screen now, only what the student selected, a rectangle the student drew (a snip),
+ * or the whole page fitted to its content (a snip set to the whole page).
+ */
+export type AskScope = 'screen' | 'selection' | 'area' | 'page'
 
 /** Shown in the sheet before sending. */
-export const ASK_DISCLOSURE = 'Send shows ChatGPT what is on screen now. "Show NOVA the entire canvas" shows the whole page instead.'
+export const ASK_DISCLOSURE = 'ChatGPT sees only the picture you send: what is on screen, your selection, or the area you choose.'
 
 export const MAX_QUESTION = 1200
 /** Largest base64 image the message may carry. */
@@ -31,7 +34,7 @@ export interface AskInput {
   paper: { color: string; pattern: string }
   /** Camera zoom, 1 = 100%. */
   zoom: number
-  /** Strokes and pictures in the picture: those in view for 'screen', all of them for 'page'. */
+  /** Strokes and pictures in the picture: those in view, selected, inside the area, or on the whole page, by scope. */
   visibleStrokes: number
   visiblePictures: number
   helpLevel: HelpLevel
@@ -66,13 +69,18 @@ export function askContext(input: AskInput): AskContext {
   }
 }
 
+const SCOPE_TEXT: Record<AskScope, string> = {
+  screen: 'Student-initiated request from NOVA Ink. The picture is exactly what is on the student\'s screen now.',
+  selection: 'Student-initiated request from NOVA Ink. The picture shows only the part of the page the student selected (a lasso selection), cropped to it; the rest of their work is not shown.',
+  area: 'Student-initiated request from NOVA Ink. The picture is a rectangle of the page the student chose (a snip), which may be only part of what is on the page.',
+  page: 'Student-initiated request from NOVA Ink. The picture is the student\'s entire canvas for this page: everything on it, fitted to its content, not just what was on screen.',
+}
+
 /** The message text: the student's request, the fixed instruction for the chosen level, then the context. */
 export function askText(input: AskInput): string {
   const context = askContext(input)
   return [
-    input.scope === 'page'
-      ? 'Student-initiated request from NOVA Ink. The picture is the student\'s entire canvas for this page: everything on it, fitted to its content, not just what was on screen.'
-      : 'Student-initiated request from NOVA Ink. The picture is exactly what is on the student\'s screen now.',
+    SCOPE_TEXT[input.scope],
     `Help level: ${context.helpLevel}. ${HELP_LEVELS[input.helpLevel].instruction}`,
     'Do not draw on or change the notebook, and do not offer more help than this level.',
     context.note ? `Student's note: ${context.note}` : 'The student added no note; answer for the chosen help level from what is on screen.',
@@ -80,15 +88,23 @@ export function askText(input: AskInput): string {
   ].join('\n')
 }
 
+const EMPTY_REFUSAL: Record<AskScope, string> = {
+  screen: 'There is no work on screen to show ChatGPT. Pan to your work first.',
+  selection: 'Nothing is selected, so there is nothing to show ChatGPT.',
+  area: 'There is no work inside that rectangle. Drag it over your work.',
+  page: 'This page is empty, so there is nothing to show ChatGPT.',
+}
+const LARGE_REFUSAL: Record<AskScope, string> = {
+  screen: 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.',
+  selection: 'The picture of the selection is too large to send (over 3 MB), even shrunk. Select less.',
+  area: 'The picture of that area is too large to send (over 3 MB), even shrunk. Choose a smaller area.',
+  page: 'The picture of the whole page is too large to send (over 3 MB), even shrunk. Choose a smaller area instead.',
+}
+
 /** A reason nothing should be sent, or null when the request is fine. A note is optional. */
 export function askRefusal(input: { scope: AskScope; visibleStrokes: number; visiblePictures: number }, imageBase64Length: number | null): string | null {
-  const page = input.scope === 'page'
-  if (input.visibleStrokes + input.visiblePictures === 0) return page ? 'This page is empty, so there is nothing to show ChatGPT.' : 'There is no work on screen to show ChatGPT. Pan to your work first.'
-  if (imageBase64Length !== null && imageBase64Length > MAX_IMAGE_BASE64) {
-    return page
-      ? 'The picture of the whole page is too large to send (over 3 MB), even shrunk. Use Send instead, zoomed on the part you want checked.'
-      : 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.'
-  }
+  if (input.visibleStrokes + input.visiblePictures === 0) return EMPTY_REFUSAL[input.scope]
+  if (imageBase64Length !== null && imageBase64Length > MAX_IMAGE_BASE64) return LARGE_REFUSAL[input.scope]
   return null
 }
 

@@ -1,17 +1,19 @@
 import { fitBounds, interpolateCamera, nextZoomStep, panBy, toScreen, viewCoverage, viewportBounds, zoomAt } from '../core/camera'
+import { intersects } from '../core/geometry'
 import { InkDocument } from '../core/document'
 import type { DocumentChange } from '../core/document'
 import { eraseFromStroke, strokesHitBy } from '../core/eraser'
 import { History } from '../core/history'
-import { createImage, dragPlacement, fitSize, imageAt, placeImage, resizeHandle, rotateHandle, rotateImage } from '../core/image'
+import { createImage, dragPlacement, fitSize, imageAt, resizeHandle, rotateHandle } from '../core/image'
 import type { DragMode, Placement } from '../core/image'
 import { InputController } from '../core/input'
 import type { PointerInput, PointerKind, Tool } from '../core/input'
 import { Samples } from '../core/metrics'
 import type { Paper } from '../core/paper'
+import { boxPolygon, frameContains, imagePickedByPolygon, offsetImage, offsetStroke, restyleStroke, selectionFrame, similarityBetween, simplifyLoop, strokeTouchesPolygon, transformImage, transformPlacement, transformStroke, unionBounds } from '../core/selection'
 import { createStroke } from '../core/stroke'
-import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
-import { composePage, composeView, countInView } from '../render/export'
+import type { Bounds, Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
+import { composePage, composeRegion, composeView, countInView, pageArea } from '../render/export'
 import { CanvasRenderer, createPath2D } from '../render/renderer'
 
 export interface SurfaceMetrics {
@@ -70,6 +72,16 @@ const HANDLE_HIT_PX = 26
 const HANDLE_HIT_TOUCH_PX = 34
 /** The rotation handle sits this far (CSS px) out from the middle of the top edge, at every zoom. */
 const ROTATE_OFFSET_PX = 36
+/** A select drag that travels less than this (CSS px) is a tap, not a lasso. */
+const TAP_TRAVEL_PX = 8
+/** The lasso keeps points at least this far (CSS px) apart. */
+const LASSO_GAP_PX = 2.5
+/** A snip rectangle is at least this big (CSS px) on each side. */
+const SNIP_MIN_PX = 24
+/** A duplicate lands this far (page units) down and to the right of the original. */
+const DUPLICATE_OFFSET = 24
+/** Margin (page units) around a selection when it is exported on its own. */
+const SELECTION_EXPORT_MARGIN = 24
 
 interface Interaction { sources: Set<string>; snapshot: boolean; stale: boolean; refreshedAt: number }
 
@@ -113,9 +125,18 @@ export class InkSurface {
   private wheelTimer: ReturnType<typeof setTimeout> | null = null
   private animation: { raf: number; target: Camera } | null = null
   private imageSource: ((image: string) => CanvasImageSource | null) | null = null
-  private selected: string | null = null
-  private drag: { mode: DragMode; from: { x: number; y: number }; item: ImageItem; place: Placement } | null = null
-  /** Called while a picture is being turned, with its angle (degrees), and with null when the turn ends. */
+  /** Ids of the selected strokes and pictures (ids are unique across both). */
+  private sel = new Set<string>()
+  /** A selection drag: the frame it started from, and where it has been dragged to. */
+  private drag: { mode: DragMode; from: { x: number; y: number }; frame: Placement; place: Placement } | null = null
+  /** A lasso being drawn (flat page points); `on` is the picture the pen went down on, for a tap. */
+  private lasso: { points: number[]; first: { x: number; y: number }; on: ImageItem | null; travel: number } | null = null
+  /** The snipping rectangle (page units) while the snip tool is active, and the drag changing it. */
+  private snip: { area: Bounds; whole: boolean } | null = null
+  private snipDrag: { mode: 'new' | 'move' | 'corner'; from: { x: number; y: number }; start: Bounds; anchor: { x: number; y: number } } | null = null
+  /** What the select tool's drag on empty paper draws: a freehand loop or a box. */
+  lassoShape: 'loop' | 'box' = 'loop'
+  /** Called while the selection is being turned, with its angle (degrees), and with null when the turn ends. */
   onTurnPreview: ((angle: number | null) => void) | null = null
 
   constructor(private readonly container: HTMLElement) {
@@ -153,7 +174,7 @@ export class InkSurface {
         this.notify()
       },
       selectBegin: (p, screen, kind) => this.selectBegin(p, screen, kind),
-      touchGrab: (p, screen) => this.pictureGrab(p, screen, 'touch') !== null,
+      touchGrab: (p, screen) => this.tool === 'snip' ? this.snipCornerAt(screen, 'touch') !== null : this.grabAt(p, screen, 'touch') !== null,
       selectMove: p => this.selectMove(p),
       selectEnd: cancelled => this.selectEnd(cancelled),
       undo: () => this.undo(),
@@ -190,7 +211,14 @@ export class InkSurface {
   get tool(): Tool { return this.input.tool }
   setTool(tool: Tool): void {
     this.input.tool = tool
-    if (tool !== 'select') this.select(null)
+    if (tool !== 'select' && tool !== 'snip') this.setSelection([])
+    this.drag = null
+    this.lasso = null
+    this.snipDrag = null
+    if (tool === 'snip') { if (!this.snip) this.snip = { area: this.defaultSnipArea(), whole: false } } else this.snip = null
+    this.invalidateScene()
+    this.needsLive = true
+    this.schedule()
     this.notify()
   }
 
@@ -201,7 +229,6 @@ export class InkSurface {
   /** Call when pictures finish loading. */
   imagesChanged(): void { this.invalidateScene() }
 
-  get selectedImage(): ImageItem | null { return (this.selected && this.doc.getImage(this.selected)) || null }
 
   /** Places a stored picture of `w` x `h` pixels in the middle of the view (at most 60% of it) and selects it. */
   insertImage(image: string, w: number, h: number): ImageItem | null {
@@ -238,82 +265,309 @@ export class InkSurface {
     return items
   }
 
-  /** Turns the selected picture a quarter clockwise about its centre, as one undoable step; it stays selected. (Any angle: drag its rotation handle.) */
-  rotateSelectedImage(): boolean {
-    const current = this.selectedImage
-    if (!current || this.readOnly) return false
-    const next = rotateImage(current)
-    if (!this.history.replaceImage(current.id, next)) return false
-    this.selected = next.id
+  // ---- selection (lasso) ----
+
+  /** The selected strokes and pictures. */
+  get selection(): { strokes: Stroke[]; images: ImageItem[] } {
+    const strokes: Stroke[] = [], images: ImageItem[] = []
+    for (const id of this.sel) {
+      const stroke = this.doc.get(id)
+      if (stroke) { strokes.push(stroke); continue }
+      const image = this.doc.getImage(id)
+      if (image) images.push(image)
+    }
+    return { strokes, images }
+  }
+
+  get selectionCount(): number { return this.sel.size }
+
+  /** The picture, when exactly one picture and no ink is selected. */
+  get selectedImage(): ImageItem | null {
+    if (this.sel.size !== 1) return null
+    const [id] = this.sel
+    return this.doc.getImage(id) ?? null
+  }
+
+  /** The frame around the selection (see selectionFrame in core/selection), or null when nothing is selected. */
+  get selectionBox(): Placement | null {
+    const { strokes, images } = this.selection
+    return selectionFrame(strokes, images)
+  }
+
+  /** Selects exactly these ids (strokes or pictures); ids not on the page are ignored. */
+  select(ids: string | null | Iterable<string>): void {
+    this.setSelection(ids === null ? [] : typeof ids === 'string' ? [ids] : ids)
+  }
+
+  private setSelection(ids: Iterable<string>) {
+    const next = new Set<string>()
+    for (const id of ids) if (this.doc.has(id) || this.doc.getImage(id)) next.add(id)
+    const same = next.size === this.sel.size && [...next].every(id => this.sel.has(id))
+    if (same) return
+    this.sel = next
+    this.needsLive = true
+    this.schedule()
+    this.notify()
+  }
+
+  /** Turns the selection a quarter clockwise about the middle of its frame, as one undoable step; it stays selected. */
+  rotateSelection(): boolean {
+    const frame = this.selectionBox
+    if (!frame || this.readOnly) return false
+    return this.applyToSelection(similarityBetween(frame, { ...frame, angle: frame.angle + 90 }))
+  }
+  /** Same as rotateSelection (the picture bar's button predates ink selection). */
+  rotateSelectedImage(): boolean { return this.rotateSelection() }
+
+  /** Removes everything selected, as one undoable step. */
+  deleteSelection(): boolean {
+    if (!this.sel.size || this.readOnly) return false
+    const { strokes, images } = this.selection
+    const done = this.history.deleteItems(strokes.map(s => s.id), images.map(i => i.id)) > 0
+    this.setSelection([])
+    this.invalidateScene()
+    this.notify()
+    return done
+  }
+  deleteSelectedImage(): boolean { return this.deleteSelection() }
+
+  /** Adds a copy of everything selected, a little down and to the right, on top, as one undoable step; the copy is selected. */
+  duplicateSelection(): boolean {
+    if (!this.sel.size || this.readOnly) return false
+    const { strokes, images } = this.selection
+    const copies = strokes.map(s => offsetStroke(s, DUPLICATE_OFFSET, DUPLICATE_OFFSET))
+    const pictures = images.map(i => offsetImage(i, DUPLICATE_OFFSET, DUPLICATE_OFFSET))
+    this.history.addItems(copies, pictures)
+    this.setSelection([...copies.map(s => s.id), ...pictures.map(i => i.id)])
+    this.invalidateScene()
+    this.notify()
+    return true
+  }
+
+  /** Gives the selected ink a new colour and/or width (pictures are left as they are), as one undoable step. */
+  restyleSelection(style: Partial<StrokeStyle>): boolean {
+    if (this.readOnly) return false
+    const { strokes } = this.selection
+    if (!strokes.length) return false
+    const changed = strokes.filter(s => (style.color !== undefined && style.color !== s.style.color) || (style.width !== undefined && style.width !== s.style.width))
+    if (!changed.length) return false
+    const next = changed.map(s => [s.id, restyleStroke(s, style)] as const)
+    this.history.replaceItems(next, [])
+    const replaced = new Map(next.map(([id, n]) => [id, n.id]))
+    this.setSelection([...this.sel].map(id => replaced.get(id) ?? id))
+    this.invalidateScene()
+    this.notify()
+    return true
+  }
+
+  /** The pen colour and width shared by the selected ink: null for a value that differs between strokes. */
+  get selectionStyle(): { color: string | null; width: number | null } | null {
+    const { strokes } = this.selection
+    if (!strokes.length) return null
+    const color = strokes.every(s => s.style.color === strokes[0].style.color) ? strokes[0].style.color : null
+    const width = strokes.every(s => s.style.width === strokes[0].style.width) ? strokes[0].style.width : null
+    return { color, width }
+  }
+
+  private applyToSelection(t: ReturnType<typeof similarityBetween>): boolean {
+    const { strokes, images } = this.selection
+    const nextStrokes = strokes.map(s => [s.id, transformStroke(s, t)] as const)
+    const nextImages = images.map(i => [i.id, transformImage(i, t)] as const)
+    if (!this.history.replaceItems(nextStrokes, nextImages)) return false
+    this.setSelection([...nextStrokes.map(([, n]) => n.id), ...nextImages.map(([, n]) => n.id)])
     this.invalidateScene()
     this.needsLive = true
     this.notify()
     return true
   }
 
-  deleteSelectedImage(): boolean {
-    const id = this.selected
-    if (!id || this.readOnly) return false
-    const done = this.history.deleteImage(id)
-    this.select(null)
-    return done
+  /**
+   * What a pen or finger at this point would grab: a handle of the selection frame (resize or turn), anywhere inside the
+   * frame (move), or, for a finger, any picture (which it selects and moves). Null when it lands on nothing to grab.
+   */
+  private grabAt(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind): { mode: DragMode } | { pick: ImageItem } | null {
+    const reach = kind === 'touch' ? HANDLE_HIT_TOUCH_PX : HANDLE_HIT_PX
+    const frame = this.selectionBox
+    if (frame) {
+      const near = (page: { x: number; y: number }) => { const sp = toScreen(this.camera, page.x, page.y); return Math.hypot(screen.x - sp.x, screen.y - sp.y) <= reach }
+      if (near(resizeHandle(frame))) return { mode: 'resize' }
+      if (near(rotateHandle(frame, ROTATE_OFFSET_PX / this.camera.z))) return { mode: 'rotate' }
+      if (frameContains(frame, p.x, p.y)) return { mode: 'move' }
+    }
+    if (kind === 'touch') { const hit = imageAt(this.doc.images, p.x, p.y); if (hit) return { pick: hit } }
+    return null
   }
 
-  private select(id: string | null) {
-    if (this.selected === id) return
-    this.selected = id
+  private beginDrag(mode: DragMode, from: { x: number; y: number }) {
+    const frame = this.selectionBox
+    if (frame) this.drag = { mode, from, frame, place: frame }
+  }
+
+  private selectBegin(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind) {
+    if (this.tool === 'snip') { this.snipBegin(p, screen, kind); return }
+    const grab = this.grabAt(p, screen, kind)
+    if (grab && 'mode' in grab) { this.beginDrag(grab.mode, p); return }
+    if (grab) { this.setSelection([grab.pick.id]); this.beginDrag('move', p); return }
+    // Empty paper (or an unselected picture, tapped to select): a lasso. The old selection stays until the lasso is drawn.
+    this.lasso = { points: [p.x, p.y], first: p, on: imageAt(this.doc.images, p.x, p.y), travel: 0 }
+    this.needsLive = true
+    this.schedule()
+  }
+
+  private selectMove(p: { x: number; y: number }) {
+    if (this.tool === 'snip') { this.snipMove(p); return }
+    const drag = this.drag
+    if (drag) {
+      drag.place = dragPlacement(drag.frame, drag.mode, drag.from, p)
+      this.invalidateScene()
+      this.needsLive = true
+      if (drag.mode === 'rotate') this.onTurnPreview?.(drag.place.angle)
+      return
+    }
+    const lasso = this.lasso
+    if (!lasso) return
+    const n = lasso.points.length
+    const gap = Math.hypot(p.x - lasso.points[n - 2], p.y - lasso.points[n - 1])
+    if (gap < LASSO_GAP_PX / this.camera.z) return
+    lasso.travel += gap
+    lasso.points.push(p.x, p.y)
+    this.needsLive = true
+    this.schedule()
+  }
+
+  private selectEnd(cancelled: boolean) {
+    if (this.tool === 'snip') { this.snipEnd(); return }
+    if (this.lasso) { this.finishLasso(cancelled); return }
+    const drag = this.drag
+    this.drag = null
+    if (drag?.mode === 'rotate') this.onTurnPreview?.(null)
+    if (!drag) return
+    const r = drag.place, f = drag.frame
+    const turned = Math.abs(((r.angle - f.angle + 540) % 360) - 180) > 0.2
+    const moved = Math.abs(r.x - f.x) + Math.abs(r.y - f.y) + Math.abs(r.w - f.w) > 0.5 / this.camera.z || turned
+    if (!cancelled && moved && !this.readOnly) this.applyToSelection(similarityBetween(f, r))
+    this.invalidateScene()
+    this.needsLive = true
+    this.notify()
+  }
+
+  /** A lasso ended: a tap picks the picture under it (or nothing); a drawn loop or box picks what it touches. */
+  private finishLasso(cancelled: boolean) {
+    const lasso = this.lasso!
+    this.lasso = null
+    this.needsLive = true
+    this.schedule()
+    if (cancelled) { this.notify(); return }
+    if (lasso.travel * this.camera.z < TAP_TRAVEL_PX) { this.setSelection(lasso.on ? [lasso.on.id] : []); this.notify(); return }
+    const n = lasso.points.length
+    const polygon = this.lassoShape === 'box'
+      ? boxPolygon(lasso.first.x, lasso.first.y, lasso.points[n - 2], lasso.points[n - 1])
+      : simplifyLoop(lasso.points, LASSO_GAP_PX / this.camera.z)
+    this.setSelection(this.pickedBy(polygon))
+    this.notify()
+  }
+
+  /** Ids of the strokes the polygon touches and the pictures it encloses the middle of. */
+  private pickedBy(polygon: readonly number[]): string[] {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (let i = 0; i + 1 < polygon.length; i += 2) { minX = Math.min(minX, polygon[i]); maxX = Math.max(maxX, polygon[i]); minY = Math.min(minY, polygon[i + 1]); maxY = Math.max(maxY, polygon[i + 1]) }
+    const box = { minX, minY, maxX, maxY }
+    const ids: string[] = []
+    for (const image of this.doc.queryImages(box)) if (imagePickedByPolygon(image, polygon, box)) ids.push(image.id)
+    for (const stroke of this.doc.query(box)) if (strokeTouchesPolygon(stroke, polygon, box)) ids.push(stroke.id)
+    return ids
+  }
+
+  /** The points of the lasso being drawn, as a polygon (a box for the box shape). */
+  private lassoPolygon(): number[] {
+    const lasso = this.lasso!
+    const n = lasso.points.length
+    return this.lassoShape === 'box' ? boxPolygon(lasso.first.x, lasso.first.y, lasso.points[n - 2], lasso.points[n - 1]) : lasso.points
+  }
+
+  // ---- snipping rectangle ----
+
+  /** The snipping rectangle (page units) while the snip tool is active, else null. */
+  get snipArea(): Bounds | null { return this.snip ? { ...this.snip.area } : null }
+  /** True while the rectangle is the whole page (as set by snipWholePage) and has not been changed since. */
+  get snipIsWholePage(): boolean { return !!this.snip?.whole }
+
+  /** Starts the snip tool: the rectangle begins around the selection if there is one, else in the middle of the view. */
+  startSnip(area?: Bounds): void {
+    if (this.tool !== 'snip') this.setTool('snip')
+    if (area && this.snip) { this.snip = { area: { ...area }, whole: false }; this.needsLive = true; this.schedule(); this.notify() }
+  }
+
+  /** Leaves the snip tool for the select tool. */
+  endSnip(): void { if (this.tool === 'snip') this.setTool('select') }
+
+  /** Sets the rectangle to everything on the page. Returns false when the page is empty. */
+  snipWholePage(): boolean {
+    const area = pageArea(this.doc)
+    if (!area || !this.snip) return false
+    this.snip = { area, whole: true }
+    this.needsLive = true
+    this.schedule()
+    this.notify()
+    return true
+  }
+
+  private defaultSnipArea(): Bounds {
+    const selected = this.selection
+    const box = unionBounds([...selected.strokes.map(s => s.bounds), ...selected.images.map(i => i.bounds)])
+    const pad = 12 / this.camera.z
+    if (box) return { minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad }
+    const view = viewportBounds(this.camera, this.widthCss, this.heightCss)
+    const w = view.maxX - view.minX, h = view.maxY - view.minY
+    return { minX: view.minX + w * 0.15, minY: view.minY + h * 0.2, maxX: view.maxX - w * 0.15, maxY: view.maxY - h * 0.2 }
+  }
+
+  private snipCornerAt(screen: { x: number; y: number }, kind: PointerKind): { x: number; y: number } | null {
+    if (!this.snip) return null
+    const a = this.snip.area, reach = kind === 'touch' ? HANDLE_HIT_TOUCH_PX : HANDLE_HIT_PX
+    // The anchor is the corner opposite the one grabbed.
+    for (const [cx, cy, ox, oy] of [[a.minX, a.minY, a.maxX, a.maxY], [a.maxX, a.minY, a.minX, a.maxY], [a.minX, a.maxY, a.maxX, a.minY], [a.maxX, a.maxY, a.minX, a.minY]]) {
+      const sp = toScreen(this.camera, cx, cy)
+      if (Math.hypot(screen.x - sp.x, screen.y - sp.y) <= reach) return { x: ox, y: oy }
+    }
+    return null
+  }
+
+  private snipBegin(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind) {
+    if (!this.snip) return
+    const start = { ...this.snip.area }
+    const anchor = this.snipCornerAt(screen, kind)
+    if (anchor) this.snipDrag = { mode: 'corner', from: p, start, anchor }
+    else if (p.x >= start.minX && p.x <= start.maxX && p.y >= start.minY && p.y <= start.maxY) this.snipDrag = { mode: 'move', from: p, start, anchor: p }
+    else this.snipDrag = { mode: 'new', from: p, start, anchor: p }
+  }
+
+  private snipMove(p: { x: number; y: number }) {
+    const drag = this.snipDrag
+    if (!drag || !this.snip) return
+    const a = drag.start
+    if (drag.mode === 'move') {
+      const dx = p.x - drag.from.x, dy = p.y - drag.from.y
+      this.snip.area = { minX: a.minX + dx, minY: a.minY + dy, maxX: a.maxX + dx, maxY: a.maxY + dy }
+    } else {
+      const k = drag.anchor
+      this.snip.area = { minX: Math.min(k.x, p.x), minY: Math.min(k.y, p.y), maxX: Math.max(k.x, p.x), maxY: Math.max(k.y, p.y) }
+    }
+    this.snip.whole = false
     this.needsLive = true
     this.schedule()
     this.notify()
   }
 
-  /**
-   * What a pen or finger at this point would grab: a handle of the selected picture (resize or rotate), or any picture
-   * to move (and select). Null when it lands on nothing.
-   */
-  private pictureGrab(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind): { mode: DragMode; item: ImageItem } | null {
-    const reach = kind === 'touch' ? HANDLE_HIT_TOUCH_PX : HANDLE_HIT_PX
-    const current = this.selectedImage
-    if (current) {
-      const near = (page: { x: number; y: number }) => { const sp = toScreen(this.camera, page.x, page.y); return Math.hypot(screen.x - sp.x, screen.y - sp.y) <= reach }
-      if (near(resizeHandle(current))) return { mode: 'resize', item: current }
-      if (near(rotateHandle(current, ROTATE_OFFSET_PX / this.camera.z))) return { mode: 'rotate', item: current }
-    }
-    const hit = imageAt(this.doc.images, p.x, p.y)
-    return hit ? { mode: 'move', item: hit } : null
-  }
-
-  private selectBegin(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind) {
-    const grab = this.pictureGrab(p, screen, kind)
-    if (grab && grab.mode !== 'move') { this.drag = { mode: grab.mode, from: p, item: grab.item, place: grab.item }; return }
-    this.select(grab?.item.id ?? null)
-    this.drag = grab ? { mode: 'move', from: p, item: grab.item, place: grab.item } : null
-  }
-
-  private selectMove(p: { x: number; y: number }) {
-    const drag = this.drag
-    if (!drag) return
-    drag.place = dragPlacement(drag.item, drag.mode, drag.from, p)
-    this.invalidateScene()
+  private snipEnd() {
+    const drag = this.snipDrag
+    this.snipDrag = null
+    if (!drag || !this.snip) return
+    const a = this.snip.area, min = SNIP_MIN_PX / this.camera.z
+    // A tap or a sliver is not a rectangle: put back the one there was.
+    if (drag.mode !== 'move' && (a.maxX - a.minX < min || a.maxY - a.minY < min)) { this.snip.area = drag.start; this.snip.whole = false }
     this.needsLive = true
-    if (drag.mode === 'rotate') this.onTurnPreview?.(drag.place.angle)
-  }
-
-  private selectEnd(cancelled: boolean) {
-    const drag = this.drag
-    this.drag = null
-    if (drag?.mode === 'rotate') this.onTurnPreview?.(null)
-    if (!drag) return
-    const r = drag.place, i = drag.item
-    const turned = Math.abs(((r.angle - i.angle + 540) % 360) - 180) > 0.2
-    const moved = Math.abs(r.x - i.x) + Math.abs(r.y - i.y) + Math.abs(r.w - i.w) > 0.5 / this.camera.z || turned
-    if (!cancelled && moved && this.doc.getImage(i.id)) {
-      const next = placeImage(i, r)
-      this.history.replaceImage(i.id, next)
-      this.selected = next.id
-    }
-    this.invalidateScene()
-    this.needsLive = true
+    this.schedule()
     this.notify()
   }
 
@@ -337,19 +591,20 @@ export class InkSurface {
   get readOnly(): boolean { return this.input.readOnly }
   set readOnly(value: boolean) {
     if (value && this.live) { this.live = null; this.needsLive = true; this.schedule() }
-    if (value) { this.drag = null; this.select(null) }
+    if (value) { this.drag = null; this.lasso = null; this.setSelection([]) }
     this.input.readOnly = value
     this.notify()
   }
 
   undo(): boolean { if (this.readOnly) return false; const done = this.history.undo(); this.dropStaleSelection(); this.notify(); return done }
   redo(): boolean { if (this.readOnly) return false; const done = this.history.redo(); this.dropStaleSelection(); this.notify(); return done }
-  private dropStaleSelection() { if (this.selected && !this.doc.getImage(this.selected)) this.select(null) }
+  private dropStaleSelection() { this.setSelection([...this.sel]) }
 
   /** Replaces the page contents. Not undoable. */
   load(strokes: readonly Stroke[], images: readonly ImageItem[] = []): void {
     this.drag = null
-    this.selected = null
+    this.lasso = null
+    this.sel = new Set()
     this.doc.load(strokes, images)
     this.history.clear()
     this.notify()
@@ -365,7 +620,7 @@ export class InkSurface {
     this.camera = camera
     this.needsPaper = true
     this.needsScene = true
-    if (this.selected) this.needsLive = true
+    if (this.sel.size || this.snip || this.lasso) this.needsLive = true
     this.schedule()
     this.notify()
   }
@@ -422,6 +677,17 @@ export class InkSurface {
     })
   }
 
+  /** Strokes and pictures that touch an area of the page. */
+  areaCounts(area: Bounds): { strokes: number; images: number } {
+    return { strokes: this.doc.query(area).length, images: this.doc.queryImages(area).length }
+  }
+
+  /** The selected strokes and pictures. */
+  selectionCounts(): { strokes: number; images: number } {
+    const { strokes, images } = this.selection
+    return { strokes: strokes.length, images: images.length }
+  }
+
   /** Every stroke and picture on the page. */
   pageCounts(): { strokes: number; images: number } {
     return { strokes: this.doc.size, images: this.doc.images.length }
@@ -438,10 +704,35 @@ export class InkSurface {
       options: { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null },
       makeCanvas: () => document.createElement('canvas'),
     })
-    if (!page) return null
-    return new Promise((resolve, reject) => {
-      (page.canvas as HTMLCanvasElement).toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not encode the page.')), 'image/png')
+    return page ? canvasBlob(page.canvas as HTMLCanvasElement) : null
+  }
+
+  /**
+   * A PNG of one rectangle of the page (a snip): everything that touches it, over the paper, wherever the camera is
+   * (long side at most `maxSide`, 4000 by default). Drawn on throwaway canvases; the camera and selection are untouched.
+   */
+  exportArea(area: Bounds, maxSide?: number): Promise<Blob> {
+    const region = composeRegion({
+      doc: this.doc, paper: this.paper, area, maxSide,
+      options: { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null },
+      makeCanvas: () => document.createElement('canvas'),
     })
+    return canvasBlob(region.canvas as HTMLCanvasElement)
+  }
+
+  /** A PNG of only the selected strokes and pictures, fitted with a margin over the paper. Null when nothing is selected. */
+  exportSelection(maxSide?: number): Promise<Blob> | null {
+    const only = this.selection
+    const box = unionBounds([...only.strokes.map(s => s.bounds), ...only.images.map(i => i.bounds)])
+    if (!box) return null
+    const m = SELECTION_EXPORT_MARGIN
+    const region = composeRegion({
+      doc: this.doc, paper: this.paper, only, maxSide,
+      area: { minX: box.minX - m, minY: box.minY - m, maxX: box.maxX + m, maxY: box.maxY + m },
+      options: { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null },
+      makeCanvas: () => document.createElement('canvas'),
+    })
+    return canvasBlob(region.canvas as HTMLCanvasElement)
   }
 
   capabilities(): Capabilities {
@@ -657,8 +948,13 @@ export class InkSurface {
       else if (this.eraser) {
         const p = toScreen(this.camera, this.eraser.x, this.eraser.y)
         this.renderer.drawEraser(p.x, p.y, this.eraser.r * this.camera.z)
-      } else if (this.drag || this.selectedImage) this.renderer.drawSelection(this.drag?.place ?? this.selectedImage!, this.camera, HANDLE_PX, ROTATE_OFFSET_PX)
-      else this.renderer.clearLive()
+      } else if (this.lasso) this.renderer.drawLasso(this.lassoPolygon(), this.camera)
+      else if (this.snip && this.tool === 'snip') this.renderer.drawSnip(this.snip.area, this.camera, HANDLE_PX)
+      else if (this.tool === 'select' && (this.drag || this.sel.size)) {
+        const frame = this.drag?.place ?? this.selectionBox
+        if (frame) this.renderer.drawSelection(frame, this.camera, HANDLE_PX, ROTATE_OFFSET_PX)
+        else this.renderer.clearLive()
+      } else this.renderer.clearLive()
       this.needsLive = false
     }
     const ms = performance.now() - start
@@ -669,13 +965,19 @@ export class InkSurface {
 
   private drawFullScene() {
     const view = viewportBounds(this.camera, this.widthCss, this.heightCss)
-    const visible = this.doc.query(view)
     const drag = this.drag
-    // While dragging, the placement is drawn where it is going; the document changes only on release.
-    const images = drag
-      ? this.doc.images.map(i => i.id === drag.item.id ? { ...i, ...drag.place } : i)
-      : this.doc.queryImages(view)
-    const { ms } = this.renderer.drawScene(visible, this.camera, undefined, images)
+    let visible: readonly Stroke[], images: readonly ImageItem[], preview: { strokeIds: ReadonlySet<string>; transform: ReturnType<typeof similarityBetween> } | undefined
+    if (drag) {
+      // While dragging, the selection is drawn where it is going; the document changes only on release.
+      const t = similarityBetween(drag.frame, drag.place), ids = this.sel
+      visible = this.doc.strokes.filter(s => ids.has(s.id) || intersects(s.bounds, view))
+      images = this.doc.images.filter(i => ids.has(i.id) || intersects(i.bounds, view)).map(i => ids.has(i.id) ? { ...i, ...transformPlacement(i, t) } : i)
+      preview = { strokeIds: ids, transform: t }
+    } else {
+      visible = this.doc.query(view)
+      images = this.doc.queryImages(view)
+    }
+    const { ms } = this.renderer.drawScene(visible, this.camera, undefined, images, preview)
     this.metrics.sceneMs.push(ms)
     this.lastSceneMs = ms
     this.lastDrawnCount = visible.length
@@ -699,4 +1001,8 @@ export class InkSurface {
   }
 
   private notify() { for (const listener of this.listeners) listener() }
+}
+
+function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not encode the picture.')), 'image/png'))
 }

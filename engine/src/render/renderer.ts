@@ -2,7 +2,9 @@ import { strokeOutline } from '../core/geometry'
 import type { OutlineOptions } from '../core/geometry'
 import { DEFAULT_PAPER, displayColor, PAPER_COLORS, patternLayers } from '../core/paper'
 import type { Paper } from '../core/paper'
-import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
+import { similarityMatrix } from '../core/selection'
+import type { Similarity } from '../core/selection'
+import type { Bounds, Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
 
 /** The subset of CanvasRenderingContext2D the renderer uses, so tests can supply a recording fake. */
 export interface Context2D {
@@ -12,6 +14,10 @@ export interface Context2D {
   fill(path?: never): void
   drawImage(image: never, dx: number, dy: number, dw: number, dh: number): void
   beginPath(): void
+  moveTo(x: number, y: number): void
+  lineTo(x: number, y: number): void
+  closePath(): void
+  setLineDash(segments: number[]): void
   arc(x: number, y: number, radius: number, start: number, end: number): void
   stroke(): void
   fillStyle: unknown
@@ -38,6 +44,9 @@ export interface RendererOptions {
 }
 
 export interface SceneStats { drawn: number; ms: number }
+
+/** Strokes drawn through a transform while a selection is being dragged; the document is untouched until release. */
+export interface ScenePreview { strokeIds: ReadonlySet<string>; transform: Similarity }
 
 /**
  * Layered Canvas 2D renderer.
@@ -109,12 +118,23 @@ export class CanvasRenderer {
   }
 
   /** Redraws the base layer: the given (already culled) images, then strokes on top, in order. */
-  drawScene(strokes: readonly Stroke[], camera: Camera, now: () => number = () => performance.now(), images: readonly ImageItem[] = []): SceneStats {
+  drawScene(strokes: readonly Stroke[], camera: Camera, now: () => number = () => performance.now(), images: readonly ImageItem[] = [], preview?: ScenePreview): SceneStats {
     const start = now()
     this.clear(this.ctx.base)
     this.applyCamera(this.ctx.base, camera)
     for (const image of images) this.drawImageItem(this.ctx.base, image, camera)
-    for (const stroke of strokes) this.fillStroke(this.ctx.base, stroke)
+    if (!preview) for (const stroke of strokes) this.fillStroke(this.ctx.base, stroke)
+    else {
+      // Selected strokes keep their own geometry (cached paths) and are drawn through the transform, in their place in the stack.
+      const [a, b, c, d, e, f] = similarityMatrix(preview.transform)
+      const s = camera.z * this.dpr
+      for (const stroke of strokes) {
+        if (!preview.strokeIds.has(stroke.id)) { this.fillStroke(this.ctx.base, stroke); continue }
+        this.ctx.base.setTransform(s * a, s * b, s * c, s * d, (e - camera.x) * s, (f - camera.y) * s)
+        this.fillStroke(this.ctx.base, stroke)
+        this.applyCamera(this.ctx.base, camera)
+      }
+    }
     return { drawn: strokes.length + images.length, ms: now() - start }
   }
 
@@ -151,6 +171,57 @@ export class CanvasRenderer {
     live.fillRect(hw - s / 2 - 1.5, hh - s / 2 - 1.5, s + 3, s + 3)
     live.fillStyle = '#1f6feb'
     live.fillRect(hw - s / 2, hh - s / 2, s, s)
+  }
+
+  /** A lasso being drawn (a closed loop, or a box), as a dashed outline on the live layer. `polygon` is flat page points. */
+  drawLasso(polygon: ArrayLike<number>, camera: Camera): void {
+    const live = this.ctx.live
+    this.clear(live)
+    if (polygon.length < 4) return
+    live.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    live.beginPath()
+    live.moveTo((polygon[0] - camera.x) * camera.z, (polygon[1] - camera.y) * camera.z)
+    for (let i = 2; i + 1 < polygon.length; i += 2) live.lineTo((polygon[i] - camera.x) * camera.z, (polygon[i + 1] - camera.y) * camera.z)
+    live.closePath()
+    live.globalAlpha = 0.08
+    live.fillStyle = '#1f6feb'
+    live.fill()
+    live.globalAlpha = 1
+    live.strokeStyle = '#1f6feb'
+    live.lineWidth = 1.6
+    live.setLineDash([6, 4])
+    live.stroke()
+    live.setLineDash([])
+  }
+
+  /**
+   * The snipping rectangle on the live layer: the page outside it dimmed, a border, and a square handle on each corner.
+   * `area` is in page units; handles are `handlePx` CSS pixels.
+   */
+  drawSnip(area: Bounds, camera: Camera, handlePx: number): void {
+    const live = this.ctx.live
+    this.clear(live)
+    live.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    const x0 = (area.minX - camera.x) * camera.z, y0 = (area.minY - camera.y) * camera.z
+    const x1 = (area.maxX - camera.x) * camera.z, y1 = (area.maxY - camera.y) * camera.z
+    const w = this.widthCss, h = this.heightCss
+    live.globalAlpha = 0.38
+    live.fillStyle = '#10151c'
+    live.fillRect(0, 0, w, Math.max(0, y0))
+    live.fillRect(0, y1, w, Math.max(0, h - y1))
+    live.fillRect(0, y0, Math.max(0, x0), y1 - y0)
+    live.fillRect(x1, y0, Math.max(0, w - x1), y1 - y0)
+    live.globalAlpha = 1
+    live.fillStyle = '#1f6feb'
+    const t = 1.5
+    live.fillRect(x0 - t, y0 - t, x1 - x0 + 2 * t, t * 2); live.fillRect(x0 - t, y1 - t, x1 - x0 + 2 * t, t * 2)
+    live.fillRect(x0 - t, y0 - t, t * 2, y1 - y0 + 2 * t); live.fillRect(x1 - t, y0 - t, t * 2, y1 - y0 + 2 * t)
+    for (const [cx, cy] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]) {
+      live.fillStyle = '#ffffff'
+      live.fillRect(cx - handlePx / 2 - 1.5, cy - handlePx / 2 - 1.5, handlePx + 3, handlePx + 3)
+      live.fillStyle = '#1f6feb'
+      live.fillRect(cx - handlePx / 2, cy - handlePx / 2, handlePx, handlePx)
+    }
   }
 
   private drawImageItem(ctx: Context2D, image: ImageItem, camera: Camera) {

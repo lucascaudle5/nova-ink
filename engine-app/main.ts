@@ -4,9 +4,11 @@ import { PAPER_COLORS, PAPER_PATTERNS } from '../engine/src/core/paper'
 import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
 import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
+import { MAX_WIDTH, MIN_WIDTH, PALETTE } from '../engine/harness/presets'
 import { MockServer } from './mock-server'
 import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
 import type { AskInput, AskScope, HelpLevel } from './ask'
+import type { Bounds } from '../engine/src/core/types'
 import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES } from './pdf'
 import type { PdfDocument, RenderedPdfPage } from './pdf'
 import { NotebookSession } from './session'
@@ -68,9 +70,9 @@ const tools = mountTools(surface, {
   onOpenPopover: () => closePanels(),
   // Tapping the pen again opens its width and color presets beside the tool rail.
   onReselect: (tool, button) => {
-    if (tool !== 'pen') return false
-    showPenFlyout(penFlyout.hidden, button)
-    return true
+    if (tool === 'pen') { showPenFlyout(penFlyout.hidden, button); return true }
+    if (tool === 'select') { showSelectFlyout(selectFlyout.hidden, button); return true }
+    return false
   },
   onPenStyle: color => { penDot.style.background = color },
 })
@@ -79,6 +81,7 @@ const tools = mountTools(surface, {
 
 function showPenFlyout(open: boolean, anchor?: HTMLElement) {
   if (open) {
+    showSelectFlyout(false)
     closePanels()
     tools.closePopover()
     const rect = (anchor ?? document.querySelector<HTMLElement>('button[data-tool="pen"]')!).getBoundingClientRect()
@@ -89,10 +92,45 @@ function showPenFlyout(open: boolean, anchor?: HTMLElement) {
   document.querySelector('button[data-tool="pen"]')?.classList.toggle('flyout-open', open)
 }
 
+// The select tool's own flyout: how a drag on empty paper selects, a freehand loop or a box.
+const selectFlyout = $<HTMLElement>('select-flyout')
+const LASSO_KEY = 'nova-ink-engine-app:lasso-shape'
+
+function showSelectFlyout(open: boolean, anchor?: HTMLElement) {
+  if (open) {
+    showPenFlyout(false)
+    closePanels()
+    tools.closePopover()
+    const rect = (anchor ?? document.querySelector<HTMLElement>('button[data-tool="select"]')!).getBoundingClientRect()
+    selectFlyout.style.left = `${rect.right + 10}px`
+    selectFlyout.style.top = `${rect.top}px`
+  }
+  selectFlyout.hidden = !open
+  document.querySelector('button[data-tool="select"]')?.classList.toggle('flyout-open', open)
+}
+
+function setLassoShape(shape: 'loop' | 'box', remember = true) {
+  surface.lassoShape = shape
+  for (const b of selectFlyout.querySelectorAll<HTMLButtonElement>('button[data-shape]')) {
+    const on = b.dataset.shape === shape
+    b.classList.toggle('selected', on)
+    b.setAttribute('aria-checked', String(on))
+  }
+  if (remember) writeStored(LASSO_KEY, shape)
+}
+for (const b of selectFlyout.querySelectorAll<HTMLButtonElement>('button[data-shape]')) b.addEventListener('click', () => { setLassoShape(b.dataset.shape as 'loop' | 'box'); showSelectFlyout(false) })
+setLassoShape(readStored(LASSO_KEY) === 'box' ? 'box' : 'loop', false)
+document.addEventListener('pointerdown', e => {
+  const target = e.target as Element
+  if (selectFlyout.hidden || selectFlyout.contains(target) || target.closest('button[data-tool="select"]')) return
+  showSelectFlyout(false)
+})
+surface.onChange(() => { if (!selectFlyout.hidden && surface.tool !== 'select') showSelectFlyout(false) })
+
 function setRailCollapsed(collapsed: boolean) {
   rail.hidden = collapsed
   railHandle.hidden = !collapsed
-  if (collapsed) { showPenFlyout(false); tools.closePopover() }
+  if (collapsed) { showPenFlyout(false); showSelectFlyout(false); tools.closePopover() }
   writeStored(RAIL_KEY, collapsed ? '1' : '0')
 }
 $('rail-collapse').addEventListener('click', () => setRailCollapsed(true))
@@ -106,7 +144,7 @@ document.addEventListener('pointerdown', e => {
   showPenFlyout(false)
 })
 surface.onChange(() => { if (!penFlyout.hidden && surface.tool !== 'pen') showPenFlyout(false) })
-window.addEventListener('keydown', e => { if (e.key === 'Escape') showPenFlyout(false) })
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { showPenFlyout(false); showSelectFlyout(false) } })
 
 const editor: PageEditor = {
   items: () => [...surface.doc.images, ...surface.doc.strokes],
@@ -153,7 +191,7 @@ if (preview) {
 let turning: number | null = null
 
 const session = new NotebookSession({ api, clientId: persistentClientId(), editor })
-surface.onChange(() => { session.changed(); renderImageBar() })
+surface.onChange(() => { session.changed(); renderSelectionBar(); renderSnipBar() })
 
 // ---- Pictures ----
 
@@ -254,12 +292,12 @@ async function insertPicture(file: File) {
   if (inserting || !state.pageId || !state.editable || state.conflict) return
   if (isPdf(file)) {
     inserting = true
-    renderImageBar()
-    try { await importPdf(file) } finally { inserting = false; renderImageBar() }
+    renderSelectionBar()
+    try { await importPdf(file) } finally { inserting = false; renderSelectionBar() }
     return
   }
   inserting = true
-  renderImageBar()
+  renderSelectionBar()
   try {
     session.say('Preparing the picture…')
     let prepared: Awaited<ReturnType<typeof preparePicture>>
@@ -276,30 +314,64 @@ async function insertPicture(file: File) {
     surface.insertImage(imageId, bitmap.width, bitmap.height)
   } finally {
     inserting = false
-    renderImageBar()
+    renderSelectionBar()
   }
 }
 
 const imageFile = $<HTMLInputElement>('image-file')
 $('insert-image').addEventListener('click', () => { tools.closePopover(); imageFile.value = ''; imageFile.click() })
 imageFile.addEventListener('change', () => { const file = imageFile.files?.[0]; if (file) void insertPicture(file) })
-$('image-rotate').addEventListener('click', () => surface.rotateSelectedImage())
-// While a picture is being turned by its handle, show the angle in the picture bar.
-surface.onTurnPreview = angle => { turning = angle; renderImageBar() }
-$('image-delete').addEventListener('click', () => surface.deleteSelectedImage())
-$('image-done').addEventListener('click', () => surface.setTool('pen'))
+$('sel-turn').addEventListener('click', () => surface.rotateSelection())
+$('sel-duplicate').addEventListener('click', () => surface.duplicateSelection())
+$('sel-delete').addEventListener('click', () => surface.deleteSelection())
+$('sel-done').addEventListener('click', () => surface.setTool('pen'))
+$('sel-ask').addEventListener('click', () => askSheet())
+$('sel-style').addEventListener('click', () => tools.togglePopover('selection-style', $('sel-style'), buildSelectionStyle))
+// While the selection is being turned by its handle, show the angle in the bar.
+surface.onTurnPreview = angle => { turning = angle; renderSelectionBar() }
+
+/** The color and width of the selected ink: tap a color, or let go of the slider, to restyle it as one undoable step. */
+function buildSelectionStyle(root: HTMLElement) {
+  const palette = el('div', { className: 'palette' })
+  const value = el('span')
+  const slider = el('input', { type: 'range', min: String(MIN_WIDTH), max: String(MAX_WIDTH), step: '0.1' })
+  const show = () => {
+    const style = surface.selectionStyle
+    for (const b of palette.children) b.classList.toggle('current', !!style && (b as HTMLElement).dataset.color === style.color)
+    if (style?.width != null) { slider.value = String(style.width); value.textContent = style.width.toFixed(1) } else value.textContent = 'mixed'
+  }
+  for (const c of PALETTE) {
+    const b = el('button', { title: c }, { background: c })
+    b.dataset.color = c
+    b.addEventListener('click', () => { surface.restyleSelection({ color: c }); show() })
+    palette.append(b)
+  }
+  slider.addEventListener('input', () => { value.textContent = Number(slider.value).toFixed(1) })
+  slider.addEventListener('change', () => { surface.restyleSelection({ width: Math.round(Number(slider.value) * 10) / 10 }); show() })
+  const title = el('h4', { textContent: 'Width' })
+  title.append(value)
+  root.append(el('h4', { textContent: 'Color of the selected ink' }), palette, title, slider)
+  show()
+}
 
 window.addEventListener('keydown', e => {
   const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && surface.selectedImage) { e.preventDefault(); surface.deleteSelectedImage() }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && surface.tool === 'select' && surface.selectionCount) { e.preventDefault(); surface.deleteSelection() }
+  if (e.key === 'Escape' && !typing && sheet.hidden) { if (surface.tool === 'snip') surface.endSnip(); else if (surface.selectionCount) surface.select(null) }
 })
 if (preview) Object.assign(window, { novaInsertPicture: insertPicture, novaSurface: surface })
 
-function renderImageBar() {
-  const picture = surface.selectedImage
-  $('image-bar').hidden = !picture
-  const angle = turning ?? picture?.angle ?? 0
-  $('image-label').textContent = angle ? `Picture selected · ${Math.round(angle)}°` : 'Picture selected'
+function plural(n: number, one: string, many = one + 's') { return `${n} ${n === 1 ? one : many}` }
+
+function renderSelectionBar() {
+  const { strokes, images } = surface.selectionCounts()
+  const bar = $('selection-bar')
+  bar.hidden = !(strokes + images) || surface.tool !== 'select'
+  const parts = [strokes ? plural(strokes, 'stroke') : '', images ? plural(images, 'picture') : ''].filter(Boolean)
+  const alone = surface.selectedImage
+  const angle = turning ?? alone?.angle ?? 0
+  $('selection-label').textContent = `${parts.join(' and ')} selected${angle ? ` · ${Math.round(angle)}°` : ''}`
+  $('sel-style').hidden = strokes === 0
   $<HTMLButtonElement>('insert-image').disabled = inserting || surface.readOnly
 }
 
@@ -751,11 +823,11 @@ let askSending = false
 const askLog: Array<{ role: string; content: Array<{ type: string; text?: string; mimeType?: string; bytes?: number }> }> = []
 if (preview) Object.assign(window, { novaAskLog: askLog })
 
-function askInput(question: string, scope: AskScope): AskInput {
+function askInput(question: string, scope: AskScope, area: Bounds | null): AskInput {
   const state = session.getState()
   const notebook = state.notebooks.find(n => n.id === state.notebookId)
   const live = livePages(state)
-  const counts = scope === 'page' ? surface.pageCounts() : surface.viewCounts()
+  const counts = scope === 'selection' ? surface.selectionCounts() : (scope === 'area' || scope === 'page') && area ? surface.areaCounts(area) : surface.viewCounts()
   return {
     scope,
     notebook: notebook?.name ?? 'Notebook', pageTitle: session.currentPage?.title ?? 'Page',
@@ -765,31 +837,33 @@ function askInput(question: string, scope: AskScope): AskInput {
   }
 }
 
-/** Page pictures are tried at these long-side sizes, largest first, until one fits in the message. */
-const PAGE_SIZES = [4000, 3000, 2000, 1600]
+/** Pictures other than the screen are tried at these long-side sizes, largest first, until one fits in the message. */
+const ASK_SIZES = [4000, 3000, 2000, 1600]
 
-/** The picture to send, as base64 PNG: the screen, or the whole page shrunk until it fits in a message. */
-async function renderForAsk(scope: AskScope): Promise<string> {
+/** The picture to send, as base64 PNG: the screen, or the selection or a rectangle shrunk until it fits in a message. */
+async function renderForAsk(scope: AskScope, area: Bounds | null): Promise<string> {
   if (scope === 'screen') return blobToBase64(await surface.exportView())
   let png = ''
-  for (const side of PAGE_SIZES) {
-    const blob = surface.exportPage(side)
-    if (!blob) throw new Error('This page is empty.')
+  for (const side of ASK_SIZES) {
+    const blob = scope === 'selection' ? surface.exportSelection(side) : area ? surface.exportArea(area, side) : null
+    if (!blob) throw new Error('There is nothing to show.')
     png = await blobToBase64(await blob)
     if (png.length <= MAX_IMAGE_BASE64) break
   }
   return png
 }
 
+const SCOPE_NOUN: Record<AskScope, string> = { screen: 'the screen', selection: 'the selection', area: 'that area', page: 'the page' }
+
 /** Student-initiated only: this runs when Send is tapped, never on its own. Reports "Sent" or the reason it was not. */
-async function sendAsk(question: string, scope: AskScope, say: (text: string, tone?: 'ok' | 'bad') => void): Promise<boolean> {
-  const input = askInput(question, scope)
+async function sendAsk(question: string, scope: AskScope, say: (text: string, tone?: 'ok' | 'bad') => void, area: Bounds | null = null): Promise<boolean> {
+  const input = askInput(question, scope, area)
   const early = askRefusal(input, null)
   if (early) { say(early, 'bad'); return false }
-  say(scope === 'page' ? 'Rendering the whole page…' : 'Rendering your work…')
+  say('Rendering your work…')
   let png: string
-  try { png = await renderForAsk(scope) } catch (error) {
-    say(`Could not render ${scope === 'page' ? 'the page' : 'the screen'}, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
+  try { png = await renderForAsk(scope, area) } catch (error) {
+    say(`Could not render ${SCOPE_NOUN[scope]}, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
     return false
   }
   // The student may have moved or edited while the picture was prepared; send what the picture shows.
@@ -816,6 +890,8 @@ async function sendAsk(question: string, scope: AskScope, say: (text: string, to
 function askSheet() {
   tools.closePopover()
   closePanels()
+  showPenFlyout(false)
+  showSelectFlyout(false)
   askSending = false
   const label = (text: string) => el('div', { className: 'sheet-label', textContent: text })
   const hint = el('div', { className: 'ask-hint' })
@@ -829,22 +905,82 @@ function askSheet() {
     hint.textContent = HELP_LEVELS[askLevel].instruction
   }
   paintLevels()
+  // With something selected, the picture is the selection unless the student picks the screen.
+  let showing: 'screen' | 'selection' = surface.selectionCount ? 'selection' : 'screen'
+  const scopeRow = el('div', { className: 'segmented two', role: 'radiogroup', ariaLabel: 'What to show' })
+  const paintScope = () => {
+    const choices: Array<['screen' | 'selection', string]> = [['screen', 'What is on screen'], ['selection', `Your selection (${surface.selectionCount})`]]
+    scopeRow.replaceChildren(...choices.map(([scope, text]) => {
+      const b = el('button', { className: scope === showing ? 'selected' : '', textContent: text, role: 'radio', ariaChecked: String(scope === showing) })
+      b.addEventListener('click', () => { showing = scope; paintScope() })
+      return b
+    }))
+  }
+  paintScope()
   const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for ChatGPT if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
   const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
   const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
-  const submit = (scope: AskScope) => async () => {
+  const send = action('Send', async () => {
     if (askSending) return
     askSending = true
-    send.disabled = whole.disabled = true
-    const sent = await sendAsk(question.value, scope, say)
+    send.disabled = true
+    const sent = await sendAsk(question.value, showing, say)
     askSending = false
-    send.disabled = whole.disabled = false
+    send.disabled = false
     if (sent) question.value = ''
-  }
-  const send = action('Send', submit('screen'), 'text primary')
-  const whole = action('Show NOVA the entire canvas', submit('page'), 'text')
-  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), whole, send])
+  }, 'text primary')
+  const choose = action('Choose an area', () => { askNote = question.value.trim(); snipFromSheet = true; closeSheet(); surface.startSnip() }, 'text')
+  openSheet('Ask NOVA', [label('Help level'), segments, hint, ...(surface.selectionCount ? [label('Show'), scopeRow] : []), label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), choose, send])
 }
+
+// ---- Snip bar: drag a rectangle over the page, pick a level, send just that ----
+
+/** The note typed in the Ask NOVA sheet, carried to the snip bar when the student chooses an area from there. */
+let askNote = ''
+let snipFromSheet = false
+let snipShown = false
+let snipSending = false
+
+function paintSnipLevels() {
+  $('snip-levels').replaceChildren(...HELP_ORDER.map(level => {
+    const b = el('button', { className: level === askLevel ? 'selected' : '', textContent: HELP_LEVELS[level].label, role: 'radio', ariaChecked: String(level === askLevel) })
+    b.addEventListener('click', () => { askLevel = level; paintSnipLevels() })
+    return b
+  }))
+}
+
+function snipSay(text: string, tone?: 'ok' | 'bad') {
+  const result = $('snip-result')
+  result.textContent = text
+  if (tone) result.dataset.tone = tone; else delete result.dataset.tone
+}
+
+function renderSnipBar() {
+  const on = surface.tool === 'snip'
+  $('snip-bar').hidden = !on
+  if (on && !snipShown) {
+    // Just opened: from the Ask NOVA sheet it keeps that sheet's note; from the rail it starts without one.
+    if (!snipFromSheet) askNote = ''
+    snipFromSheet = false
+    snipSay('')
+    paintSnipLevels()
+  }
+  snipShown = on
+  if (!on) return
+  const note = $('snip-note')
+  note.textContent = askNote ? `Note: ${askNote}` : ''
+  $<HTMLButtonElement>('snip-send').disabled = snipSending
+}
+
+$('snip-cancel').addEventListener('click', () => surface.endSnip())
+$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show ChatGPT.', 'bad') })
+$('snip-send').addEventListener('click', async () => {
+  const area = surface.snipArea
+  if (!area || snipSending) return
+  snipSending = true
+  renderSnipBar()
+  try { await sendAsk(askNote, surface.snipIsWholePage ? 'page' : 'area', snipSay, area) } finally { snipSending = false; renderSnipBar() }
+})
 $('ask-button').addEventListener('click', askSheet)
 
 // ---- More menu ----

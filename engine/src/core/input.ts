@@ -3,8 +3,11 @@ import type { GestureFrame } from './camera'
 import type { Camera } from './types'
 
 export type PointerKind = 'pen' | 'touch' | 'mouse'
-/** 'select' picks, moves, resizes and turns images with the pen or mouse, and with a finger that lands on a picture. */
-export type Tool = 'pen' | 'eraser' | 'select'
+/**
+ * 'select' lassos ink and pictures with the pen or mouse, and moves, resizes and turns the selection (with the pen, the mouse, or a
+ * finger that lands on it). 'snip' drags a rectangle over the page; fingers still pan and zoom.
+ */
+export type Tool = 'pen' | 'eraser' | 'select' | 'snip'
 
 /** One input sample in screen (CSS pixel) coordinates. `t` is the event timestamp in ms. */
 export interface PointerSample { x: number; y: number; pressure: number; t: number }
@@ -134,7 +137,7 @@ export class InputController {
     if (phase === 'down') {
       // A pointer cannot go down twice, and there is one pen and one mouse, so the earlier one must have been lost.
       if (this.inkPointer !== null && (id === this.inkPointer || this.inkKind === event.kind)) this.cancelAll()
-      if (this.readOnly || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
+      if ((this.readOnly && this.tool !== 'snip') || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
       if (this.grab !== null) { const lost = this.grab; this.grab = null; this.ignored.add(lost); this.handlers.selectEnd?.(true) }
       for (const touchId of this.touches.keys()) this.ignored.add(touchId)
       this.touches.clear()
@@ -142,7 +145,8 @@ export class InputController {
       this.tap = null
       this.inkPointer = id
       this.inkKind = event.kind
-      this.inkMode = this.tool
+      // The snip rectangle is dragged through the same handlers as a selection.
+      this.inkMode = this.tool === 'snip' ? 'select' : this.tool
       if (this.inkMode === 'pen') {
         const [first, ...rest] = samples.map(s => this.toPageSample(s))
         this.handlers.strokeBegin(first)
@@ -191,7 +195,7 @@ export class InputController {
       if (this.grab !== null && last && last.t - this.grabT > 1500) this.cancelAll()
       if (this.inkPointer !== null || this.grab !== null) { this.ignored.add(id); return }
       if (!last) return
-      if (!this.touches.size && !this.readOnly && this.tool === 'select') {
+      if (!this.touches.size && (this.tool === 'snip' || (!this.readOnly && this.tool === 'select'))) {
         const page = this.toPageSample(last)
         if (this.handlers.touchGrab?.(page, last)) {
           this.grab = id

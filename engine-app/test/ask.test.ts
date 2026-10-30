@@ -61,7 +61,7 @@ test('nothing is sent for an empty view or an image over 3 MB; an empty note is 
 })
 
 test('the disclosure says ChatGPT sees what is on screen', () => {
-  assert.ok(ASK_DISCLOSURE.includes('what is on screen now') && ASK_DISCLOSURE.includes('entire canvas'))
+  assert.ok(ASK_DISCLOSURE.includes('on screen') && ASK_DISCLOSURE.includes('selection') && ASK_DISCLOSURE.includes('area'))
 })
 
 test('the whole-page scope says the picture is the entire canvas, and refuses an empty page in its own words', () => {
@@ -74,4 +74,18 @@ test('the whole-page scope says the picture is the entire canvas, and refuses an
   assert.match(askRefusal({ scope: 'page', visibleStrokes: 0, visiblePictures: 0 }, null)!, /page is empty/)
   assert.match(askRefusal({ scope: 'page', visibleStrokes: 1, visiblePictures: 0 }, MAX_IMAGE_BASE64 + 1)!, /whole page is too large/)
   assert.ok(askText(input).includes('exactly what is on the student'), 'the screen scope still says so')
+})
+
+test('selection and area scopes describe their picture and refuse in their own words', () => {
+  const selection = askText({ ...input, scope: 'selection' })
+  assert.ok(selection.includes('only the part of the page the student selected'))
+  assert.ok(!selection.includes('exactly what is on the student'))
+  const area = askText({ ...input, scope: 'area' })
+  assert.ok(area.includes('a rectangle of the page the student chose'))
+  assert.equal(askContext({ ...input, scope: 'area' }).scope, 'area')
+  assert.match(askRefusal({ scope: 'selection', visibleStrokes: 0, visiblePictures: 0 }, null)!, /Nothing is selected/)
+  assert.match(askRefusal({ scope: 'area', visibleStrokes: 0, visiblePictures: 0 }, null)!, /no work inside that rectangle/)
+  assert.match(askRefusal({ scope: 'area', visibleStrokes: 3, visiblePictures: 0 }, MAX_IMAGE_BASE64 + 1)!, /smaller area/)
+  assert.match(askRefusal({ scope: 'selection', visibleStrokes: 3, visiblePictures: 0 }, MAX_IMAGE_BASE64 + 1)!, /Select less/)
+  assert.equal(askRefusal({ scope: 'area', visibleStrokes: 3, visiblePictures: 0 }, 1000), null)
 })

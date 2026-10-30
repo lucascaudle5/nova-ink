@@ -20,6 +20,10 @@ class FakeContext implements Context2D {
   fill() { this.calls.push(`fill:${String(this.fillStyle)}`) }
   drawImage(_image: never, dx: number, dy: number, dw: number, dh: number) { this.images.push({ dx, dy, dw, dh }); this.calls.push('image') }
   beginPath() { this.calls.push('beginPath') }
+  moveTo() { this.calls.push('moveTo') }
+  lineTo() { this.calls.push('lineTo') }
+  closePath() { this.calls.push('closePath') }
+  setLineDash() { this.calls.push('dash') }
   arc() { this.calls.push('arc') }
   stroke() { this.calls.push('stroke') }
 }
