@@ -432,6 +432,8 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
 
   registerAppResource(server, 'NOVA Ink Notebook', ENGINE_UI_URI, { mimeType: RESOURCE_MIME_TYPE }, async () => {
     if (!ctx.scopes.includes('mcp:read')) throw new Error('mcp:read permission required')
+    // One line per fetch of the notebook UI, so a host's use of it (Gemini reads it when it registers the tools) can be seen in the Worker's logs.
+    console.log(JSON.stringify({ evt: 'ui-resource', uri: ENGINE_UI_URI, bytes: ENGINE_WIDGET_HTML.length }))
     return {
       contents: [{
         uri: ENGINE_UI_URI,
