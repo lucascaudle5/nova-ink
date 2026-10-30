@@ -28,19 +28,27 @@ describe('engine Worker sign-in and configuration', () => {
 })
 
 describe('engine tools', () => {
-  it('lists the notebook tools; only the open tool is visible to the model; serves the notebook app', async () => {
+  it('lists the notebook tools; the model sees only the open tool and the NOVA tools; serves the notebook app', async () => {
     const token = (await signIn())!
     const { body } = await rpc(token, 'tools/list')
     const tools = body.result.tools as any[]
     expect(tools.map(t => t.name).sort()).toEqual([
       'nb_add_page', 'nb_create_folder', 'nb_create_notebook', 'nb_get_image', 'nb_heartbeat', 'nb_list', 'nb_list_checkpoints', 'nb_move_page', 'nb_open_page', 'nb_put_image', 'nb_release',
+      'nb_report_ops', 'nb_get_source_chunk', 'nb_job_done', 'nb_jobs', 'nb_put_source_chunk', 'nova_edit_page', 'nova_import_file', 'nova_list_notebooks', 'nova_op_status', 'nova_organize', 'nova_place_source', 'nova_read_page',
       'nb_remove_folder', 'nb_remove_notebook', 'nb_remove_page', 'nb_rename_folder', 'nb_rename_notebook', 'nb_rename_page', 'nb_restore_checkpoint',
       'nb_restore_folder', 'nb_restore_notebook', 'nb_restore_page', 'nb_save_page', 'nb_update_notebook', 'open_nova_notebook',
-    ])
+    ].sort())
     for (const t of tools) {
       if (t.name === 'open_nova_notebook') expect(t._meta.ui.resourceUri).toBe('ui://nova-ink-engine/notebook')
-      else expect(t._meta.ui.visibility, t.name).toEqual(['app'])
+      else if (t.name.startsWith('nova_')) {
+        // model-visible by design: no visibility restriction, honest read/write hints, and nothing destructive
+        expect(t._meta?.ui?.visibility, t.name).toBeUndefined()
+        expect(t.annotations.destructiveHint, t.name).toBe(false)
+      } else expect(t._meta.ui.visibility, t.name).toEqual(['app'])
     }
+    expect(tools.find(t => t.name === 'nova_import_file')._meta['openai/fileParams']).toEqual(['file'])
+    expect(tools.find(t => t.name === 'nova_read_page').annotations.readOnlyHint).toBe(true)
+    expect(tools.find(t => t.name === 'nova_edit_page').annotations.readOnlyHint).toBe(false)
     const resource = await rpc(token, 'resources/read', { uri: 'ui://nova-ink-engine/notebook' })
     const content = resource.body.result.contents[0]
     expect(content.text).toMatch(/<(!doctype|html)/i)

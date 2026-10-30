@@ -24,6 +24,8 @@ const COLOR = /^#[0-9a-f]{6}$/
 /** Pictures are stored in pieces small enough for one tool call each. */
 export const IMAGE_CHUNK_BYTES = 192 * 1024
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+export const MAX_SOURCE_BYTES = 24 * 1024 * 1024
+const MAX_PENDING_JOBS = 20
 const MAX_IMAGE_PIXELS_SIDE = 8192
 const IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp']
 const IMAGE_REF = /^[A-Za-z0-9_-]{1,64}$/
@@ -72,10 +74,17 @@ export class NotebookLibraryDO extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_key TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT) WITHOUT ROWID')
     this.sql.exec('CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, mime TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, bytes INTEGER NOT NULL, count INTEGER NOT NULL, complete INTEGER NOT NULL, created_at TEXT NOT NULL) WITHOUT ROWID')
     this.sql.exec('CREATE TABLE IF NOT EXISTS image_chunks (id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, idx)) WITHOUT ROWID')
+    // NOVA's canvas work (all additive): original source documents, jobs the open notebook runs for them, and request memory.
+    this.sql.exec('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, mime TEXT NOT NULL, bytes INTEGER NOT NULL, count INTEGER NOT NULL, pages INTEGER, complete INTEGER NOT NULL, created_at TEXT NOT NULL) WITHOUT ROWID')
+    this.sql.exec('CREATE TABLE IF NOT EXISTS source_chunks (id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, idx)) WITHOUT ROWID')
+    this.sql.exec('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, kind TEXT NOT NULL, params TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL, finished_at TEXT) WITHOUT ROWID')
+    this.sql.exec('CREATE TABLE IF NOT EXISTS requests (request_id TEXT PRIMARY KEY, result TEXT NOT NULL, created_at TEXT NOT NULL) WITHOUT ROWID')
     // Added after the first deployment: nullable, so existing notebooks read as "no folder, default color".
     const columns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(notebooks)').toArray().map(c => c.name))
     if (!columns.has('folder_id')) this.sql.exec('ALTER TABLE notebooks ADD COLUMN folder_id TEXT')
     if (!columns.has('color')) this.sql.exec('ALTER TABLE notebooks ADD COLUMN color TEXT')
+    const imageColumns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(images)').toArray().map(c => c.name))
+    if (!imageColumns.has('meta')) this.sql.exec('ALTER TABLE images ADD COLUMN meta TEXT')
   }
 
   private folderRows() { return this.sql.exec<FolderRow>('SELECT * FROM folders ORDER BY sort_key, id').toArray() }
@@ -333,6 +342,126 @@ export class NotebookLibraryDO extends DurableObject {
   /** Ids among `ids` that are not complete pictures of this library. */
   missingImages(ids: string[]): string[] {
     return [...new Set(ids)].filter(id => !IMAGE_REF.test(id) || !this.imageRow(id)?.complete)
+  }
+
+  // ---- provenance: where a placed picture came from (document, page, crop) ----
+
+  /** Records provenance once for a complete picture; it is never rewritten. */
+  setImageMeta(req: { imageId: string; meta: Record<string, unknown> }): Result {
+    const row = IMAGE_REF.test(req?.imageId ?? '') ? this.imageRow(req.imageId) : null
+    if (!row?.complete) return fail('NOT_FOUND', 'That picture was not found.')
+    const m = req.meta as Record<string, any>
+    const crop = m?.crop
+    if (!m || typeof m !== 'object' || !IMAGE_REF.test(String(m.sourceId ?? '')) || !Number.isSafeInteger(m.page) || m.page < 1
+      || (crop !== undefined && !(crop && ['x', 'y', 'w', 'h'].every(k => typeof crop[k] === 'number' && crop[k] >= 0 && crop[k] <= 1)))) return fail('INVALID_REQUEST', 'Invalid picture source details.')
+    const meta = { sourceId: m.sourceId, sourceName: String(m.sourceName ?? '').slice(0, 120), page: m.page, ...(crop ? { crop: { x: crop.x, y: crop.y, w: crop.w, h: crop.h } } : {}) }
+    this.sql.exec('UPDATE images SET meta = ? WHERE id = ? AND meta IS NULL', JSON.stringify(meta), row.id)
+    return { ok: true }
+  }
+
+  imageMetas(ids: string[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const id of [...new Set(ids)].filter(i => IMAGE_REF.test(i)).slice(0, 200)) {
+      const raw = this.sql.exec<{ meta: string | null }>('SELECT meta FROM images WHERE id = ?', id).toArray()[0]?.meta
+      if (raw) { try { out[id] = JSON.parse(raw) } catch { /* ignore */ } }
+    }
+    return out
+  }
+
+  // ---- source documents (the original file, kept as uploaded) ----
+
+  putSourceChunk(req: { sourceId: string; name: string; bytes: number; count: number; index: number; data: string; pages?: number }): Result {
+    const { sourceId, bytes, count, index } = req ?? ({} as never)
+    if (!IMAGE_REF.test(sourceId ?? '')) return fail('INVALID_REQUEST', 'Invalid document id.')
+    if (![bytes, count, index].every(Number.isSafeInteger) || bytes < 8 || bytes > MAX_SOURCE_BYTES || count < 1 || count !== Math.ceil(bytes / IMAGE_CHUNK_BYTES) || index < 0 || index >= count) return fail('INVALID_REQUEST', 'Invalid document size or piece number.')
+    let chunk: Uint8Array
+    try { chunk = fromBase64(req.data) } catch { return fail('INVALID_REQUEST', 'The document data is not valid base64.') }
+    const expected = index < count - 1 ? IMAGE_CHUNK_BYTES : bytes - IMAGE_CHUNK_BYTES * (count - 1)
+    if (chunk.length !== expected) return fail('INVALID_REQUEST', `Document piece ${index + 1} has ${chunk.length} bytes; expected ${expected}.`)
+    if (index === 0 && ![...'%PDF-'].every((c, i) => chunk[i] === c.charCodeAt(0))) return fail('INVALID_DOCUMENT', 'Only PDF documents can be stored as sources.')
+    const existing = this.sql.exec<{ bytes: number; count: number; complete: number }>('SELECT bytes, count, complete FROM sources WHERE id = ?', sourceId).toArray()[0]
+    if (existing && (existing.bytes !== bytes || existing.count !== count)) return fail('INVALID_REQUEST', 'This document id is already used by a different document.')
+    if (existing?.complete) return { ok: true, complete: true }
+    const name = clean(req.name, 120) || 'Document.pdf'
+    const pages = Number.isSafeInteger(req.pages) && req.pages! > 0 && req.pages! < 5000 ? req.pages! : null
+    this.ctx.storage.transactionSync(() => {
+      if (!existing) this.sql.exec('INSERT INTO sources (id, name, mime, bytes, count, pages, complete, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)', sourceId, name, 'application/pdf', bytes, count, pages, this.iso())
+      else if (pages) this.sql.exec('UPDATE sources SET pages = ? WHERE id = ?', pages, sourceId)
+      this.sql.exec('INSERT OR REPLACE INTO source_chunks (id, idx, data) VALUES (?, ?, ?)', sourceId, index, chunk.buffer as ArrayBuffer)
+    })
+    const stored = this.sql.exec<{ n: number; total: number }>('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)), 0) AS total FROM source_chunks WHERE id = ?', sourceId).one()
+    const complete = stored.n === count && stored.total === bytes
+    if (complete) this.sql.exec('UPDATE sources SET complete = 1 WHERE id = ?', sourceId)
+    return { ok: true, complete, stored: stored.n }
+  }
+
+  getSourceChunk(req: { sourceId: string; index: number }): Result {
+    const row = IMAGE_REF.test(req?.sourceId ?? '') ? this.sql.exec<{ id: string; count: number; bytes: number; complete: number }>('SELECT id, count, bytes, complete FROM sources WHERE id = ?', req.sourceId).toArray()[0] : null
+    if (!row?.complete) return fail('NOT_FOUND', 'That document was not found.')
+    if (!Number.isSafeInteger(req.index) || req.index < 0 || req.index >= row.count) return fail('INVALID_REQUEST', 'Invalid document piece number.')
+    const chunk = this.sql.exec<{ data: ArrayBuffer }>('SELECT data FROM source_chunks WHERE id = ? AND idx = ?', row.id, req.index).toArray()[0]
+    if (!chunk) return fail('CORRUPT_RECORD', 'A piece of this document is missing.')
+    return { ok: true, bytes: row.bytes, count: row.count, index: req.index, data: toBase64(new Uint8Array(chunk.data)) }
+  }
+
+  listSources(): Result {
+    const sources = this.sql.exec<{ id: string; name: string; bytes: number; pages: number | null; created_at: string }>('SELECT id, name, bytes, pages, created_at FROM sources WHERE complete = 1 ORDER BY created_at DESC, id LIMIT 100').toArray()
+    return { ok: true, sources: sources.map(s => ({ id: s.id, name: s.name, bytes: s.bytes, pages: s.pages, createdAt: s.created_at })) }
+  }
+
+  getSource(id: string): { id: string; name: string; pages: number | null } | null {
+    const s = IMAGE_REF.test(id ?? '') ? this.sql.exec<{ id: string; name: string; pages: number | null }>('SELECT id, name, pages FROM sources WHERE id = ? AND complete = 1', id).toArray()[0] : null
+    return s ?? null
+  }
+
+  // ---- jobs: work only the open notebook can do (it renders PDF pages), asked for by NOVA ----
+
+  /** The same request id returns the same job. */
+  createJob(req: { requestId: string; kind: string; params: unknown }): Result {
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(req?.requestId ?? '')) return fail('INVALID_REQUEST', 'requestId must be 8 to 64 letters, digits, - or _.')
+    const prior = this.sql.exec<{ id: string; status: string }>('SELECT id, status FROM jobs WHERE request_id = ?', req.requestId).toArray()[0]
+    if (prior) return { ok: true, duplicate: true, jobId: prior.id, status: prior.status }
+    const pending = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM jobs WHERE status = 'pending'").one().n
+    if (pending >= MAX_PENDING_JOBS) return fail('TOO_MANY_PENDING', 'Many requests are already waiting for the notebook to open. Open the notebook first.')
+    const id = crypto.randomUUID()
+    this.sql.exec('INSERT INTO jobs (id, request_id, kind, params, status, result, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', id, req.requestId, req.kind, JSON.stringify(req.params), 'pending', '{}', this.iso())
+    return { ok: true, jobId: id, status: 'pending' }
+  }
+
+  pendingJobs(): Result {
+    const rows = this.sql.exec<{ id: string; kind: string; params: string }>("SELECT id, kind, params FROM jobs WHERE status = 'pending' ORDER BY created_at, id LIMIT 5").toArray()
+    return { ok: true, jobs: rows.map(r => ({ jobId: r.id, kind: r.kind, params: JSON.parse(r.params) })) }
+  }
+
+  getJob(id: string): { id: string; kind: string; params: any; status: string; result: any } | null {
+    const r = isUuid(id) ? this.sql.exec<{ id: string; kind: string; params: string; status: string; result: string }>('SELECT id, kind, params, status, result FROM jobs WHERE id = ?', id).toArray()[0] : null
+    return r ? { id: r.id, kind: r.kind, params: JSON.parse(r.params), status: r.status, result: JSON.parse(r.result) } : null
+  }
+
+  /** Moves a pending job to a final state exactly once. Returns false if it was not pending. */
+  finishJob(req: { jobId: string; status: 'done' | 'failed'; result: unknown }): boolean {
+    if (!isUuid(req?.jobId)) return false
+    const cursor = this.sql.exec("UPDATE jobs SET status = ?, result = ?, finished_at = ? WHERE id = ? AND status = 'pending'", req.status, JSON.stringify(req.result ?? {}), this.iso(), req.jobId)
+    return cursor.rowsWritten > 0
+  }
+
+  // ---- organizing, with request memory so a retry never makes a second notebook or page ----
+
+  organize(req: { requestId: string; action: string; [key: string]: unknown }): Result {
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(String(req?.requestId ?? ''))) return fail('INVALID_REQUEST', 'requestId must be 8 to 64 letters, digits, - or _.')
+    const prior = this.sql.exec<{ result: string }>('SELECT result FROM requests WHERE request_id = ?', req.requestId).toArray()[0]
+    if (prior) return { ...JSON.parse(prior.result), duplicate: true }
+    let result: Result
+    switch (req.action) {
+      case 'create_notebook': result = this.createNotebook(req as never); break
+      case 'rename_notebook': result = this.renameNotebook(req as never); break
+      case 'add_page': result = this.addPage(req as never); break
+      case 'rename_page': result = this.renamePage(req as never); break
+      case 'move_page': result = this.movePage(req as never); break
+      default: result = fail('INVALID_REQUEST', 'Unknown organize action.')
+    }
+    if (result.ok) this.sql.exec('INSERT INTO requests (request_id, result, created_at) VALUES (?, ?, ?)', req.requestId, JSON.stringify(result), this.iso())
+    return result
   }
 
   private imageRow(id: string) {

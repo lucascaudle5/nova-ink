@@ -12,12 +12,16 @@
  */
 import { DurableObject } from 'cloudflare:workers'
 import { MAX_ZOOM, MIN_ZOOM } from '../../../engine/src/core/camera'
-import { parseItem, serializeImage, STROKE_ID } from '../../../engine/src/core/format'
+import { parseItem, serializeImage, serializeItem, STROKE_ID } from '../../../engine/src/core/format'
+import { applyPlanToScene, parseOps, planOps } from '../../../engine/src/core/ops'
+import type { Op } from '../../../engine/src/core/ops'
+import { describeScene } from '../../../engine/src/core/scene'
+import type { SceneInput } from '../../../engine/src/core/scene'
 import { isImage } from '../../../engine/src/core/types'
-import { isOrderKey } from '../../../engine/src/core/order'
+import { isOrderKey, keyBetween } from '../../../engine/src/core/order'
 import { DEFAULT_PAPER, isPaper } from '../../../engine/src/core/paper'
 import type { Paper } from '../../../engine/src/core/paper'
-import type { Camera } from '../../../engine/src/core/types'
+import type { Camera, ImageItem, PageItem, Stroke } from '../../../engine/src/core/types'
 
 export const PAGE_FORMAT = 1
 export const LEASE_MS = 45_000
@@ -27,7 +31,15 @@ export const MAX_SAVE_STROKES = 5_000
 
 export type Result = { ok: boolean; code?: string; message?: string; [key: string]: unknown }
 export type AddedStroke = { key: string; stroke: unknown }
+export const MAX_QUEUED_OPS = 30
+export const MAX_KEPT_OPS = 200
+export type OpStatus = 'queued' | 'applied' | 'saved' | 'failed'
+type OpRow = { request_id: string; op_id: string; ops: string; status: OpStatus; created_at: string; applied_at: string | null; saved_at: string | null; revision: number | null; result: string }
+const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/
+
 export type PageSave = {
+  /** Requests the editor applied since its last confirmed save; they become 'saved' with this save. */
+  appliedOps?: string[]
   clientId: string
   saveId: string
   baseRevision: number
@@ -95,6 +107,7 @@ export class PageDO extends DurableObject {
       this.sql.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID')
       this.sql.exec('CREATE TABLE IF NOT EXISTS checkpoint_index (revision INTEGER PRIMARY KEY, saved_at TEXT NOT NULL, chunks INTEGER NOT NULL, bytes INTEGER NOT NULL, strokes INTEGER NOT NULL) WITHOUT ROWID')
       this.sql.exec('CREATE TABLE IF NOT EXISTS checkpoint_chunks (revision INTEGER NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (revision, idx)) WITHOUT ROWID')
+      this.sql.exec('CREATE TABLE IF NOT EXISTS ops (request_id TEXT PRIMARY KEY, op_id TEXT NOT NULL, ops TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, applied_at TEXT, saved_at TEXT, revision INTEGER, result TEXT NOT NULL) WITHOUT ROWID')
       this.sql.exec('CREATE TABLE IF NOT EXISTS quarantine (at TEXT NOT NULL, source TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY (at, source, id)) WITHOUT ROWID')
     })
   }
@@ -221,31 +234,43 @@ export class PageDO extends DurableObject {
    * (assembled without parsing; the client parses and validates every stroke with the engine's parser).
    */
   open(req: { clientId: string; takeOver?: boolean; knownRevision?: number }): Promise<Result> {
-    return this.serialize(() => {
+    return this.serialize(async () => {
       this.rowsWritten = 0
       if (!isUuid(req?.clientId)) return fail('INVALID_REQUEST', 'Invalid editor client id.')
+      // Work queued while the notebook was closed is applied now, before this editor loads the page.
+      if (!req.takeOver && !this.liveEditorOtherThan(req.clientId)) await this.drain()
       const state = this.readHead()
       if ('error' in state) return state.error
       const { head } = state
       if (!head) {
         if (this.missingHead(req.knownRevision)) return fail('MISSING_RECORD', 'This page was saved before, but its data is missing. Choose a checkpoint to restore it.')
-        return { ok: true, revision: 0, rows: '[]', strokeCount: 0, paper: this.paper(), camera: null, ...this.takeLease(req.clientId, !!req.takeOver) }
+        return { ok: true, revision: 0, rows: '[]', strokeCount: 0, paper: this.paper(), camera: null, ...this.takeLease(req.clientId, !!req.takeOver), pendingOps: this.pendingOps() }
       }
       const read = this.readRows(head)
       if ('error' in read) return read.error
       return {
         ok: true, revision: head.revision, rows: rowsText(read.rows), strokeCount: read.rows.length,
-        paper: this.paper(), camera: this.camera(), ...this.takeLease(req.clientId, !!req.takeOver),
+        paper: this.paper(), camera: this.camera(), ...this.takeLease(req.clientId, !!req.takeOver), pendingOps: this.pendingOps(),
       }
     })
   }
 
-  heartbeat(req: { clientId: string }): Promise<Result> {
+  /**
+   * Renews the lease. The reply carries the head revision (so an editor that fell behind can notice) and the
+   * requests still waiting to be applied. `applied` lists requests this editor applied but has not saved yet.
+   */
+  heartbeat(req: { clientId: string; applied?: string[] }): Promise<Result> {
     return this.serialize(() => {
       if (!isUuid(req?.clientId)) return fail('INVALID_REQUEST', 'Invalid editor client id.')
       const current = this.getLease()
       if (current && current.clientId !== req.clientId && current.until > this.clock()) return { ok: true, readOnly: true, leaseExpiresAt: this.iso(current.until) }
-      return { ok: true, ...this.takeLease(req.clientId) }
+      const lease = this.takeLease(req.clientId)
+      const at = this.iso()
+      for (const id of Array.isArray(req.applied) ? req.applied.slice(0, 50) : []) {
+        if (typeof id === 'string') this.run("UPDATE ops SET status = 'applied', applied_at = ? WHERE request_id = ? AND status = 'queued'", at, id)
+      }
+      const state = this.readHead()
+      return { ok: true, ...lease, revision: 'head' in state ? state.head?.revision ?? 0 : null, pendingOps: this.pendingOps() }
     })
   }
 
@@ -317,9 +342,191 @@ export class PageDO extends DurableObject {
           lastCheckpointAt: head?.lastCheckpointAt ?? null,
         }
         this.kvPut('head', JSON.stringify(next))
+        for (const id of Array.isArray(req.appliedOps) ? req.appliedOps.slice(0, 50) : []) {
+          if (typeof id === 'string') this.run("UPDATE ops SET status = 'saved', saved_at = ?, revision = ? WHERE request_id = ? AND status IN ('queued', 'applied')", savedAt, revision, id)
+        }
       })
       this.takeLease(req.clientId)
       return { ok: true, revision, savedAt, strokeCount: count, stats: this.stats() }
+    })
+  }
+
+  // ---------------------------------------------------------------- NOVA's canvas operations
+
+  private liveEditorOtherThan(clientId?: string): boolean {
+    const lease = this.getLease()
+    return !!lease && lease.until > this.clock() && lease.clientId !== clientId
+  }
+  private liveEditor(): boolean { return this.liveEditorOtherThan(undefined) }
+
+  private pendingOps() {
+    return this.run<OpRow>("SELECT * FROM ops WHERE status IN ('queued', 'applied') ORDER BY created_at, request_id")
+      .map(r => ({ requestId: r.request_id, opId: r.op_id, ops: JSON.parse(r.ops) as Op[] }))
+  }
+
+  private opView(r: OpRow) {
+    const result = JSON.parse(r.result || '{}') as Record<string, unknown>
+    return {
+      requestId: r.request_id, status: r.status, createdAt: r.created_at, appliedAt: r.applied_at, savedAt: r.saved_at, revision: r.revision,
+      summary: result.summary ?? [], warnings: result.warnings ?? [], groups: result.groups ?? [], reason: result.message ?? null, via: result.via ?? null,
+    }
+  }
+
+  /** The page as items, in z-order, with each stored row's order key. Damaged rows are skipped (the editor reports them). */
+  private readScene(head: Head | null): { scene: SceneInput; keys: Map<string, string>; lastKey: string | null } | { error: Result } {
+    let rows: Row[] = []
+    if (head) {
+      const read = this.readRows(head)
+      if ('error' in read) return read
+      rows = read.rows
+    } else if (this.missingHead(undefined)) return { error: fail('MISSING_RECORD', 'The saved page data is missing.') }
+    const strokes: Stroke[] = [], images: ImageItem[] = [], keys = new Map<string, string>()
+    for (const r of rows) {
+      let parsed: ReturnType<typeof parseItem> | null = null
+      try { parsed = parseItem(JSON.parse(r.json)) } catch { /* skipped */ }
+      if (!parsed?.ok) continue
+      keys.set(r.id, r.key)
+      if (isImage(parsed.item)) images.push(parsed.item); else strokes.push(parsed.item)
+    }
+    return { scene: { strokes, images }, keys, lastKey: rows.at(-1)?.key ?? null }
+  }
+
+  private settle(requestId: string, status: OpStatus, result: Record<string, unknown>, revision: number | null = null) {
+    const at = this.iso()
+    this.run('UPDATE ops SET status = ?, result = ?, applied_at = COALESCE(applied_at, ?), saved_at = ?, revision = ? WHERE request_id = ?',
+      status, JSON.stringify(result), at, status === 'saved' ? at : null, revision, requestId)
+  }
+
+  /**
+   * With nobody editing, applies queued requests straight to the stored page, one revision each, with the same planner
+   * the editor uses. Returns the newest revision written, so the caller can keep the library's marker current.
+   */
+  private async drain(): Promise<{ revision: number; savedAt: string } | null> {
+    if (this.liveEditor()) return null
+    const queued = this.run<OpRow>("SELECT * FROM ops WHERE status IN ('queued', 'applied') ORDER BY created_at, request_id")
+    let advanced: { revision: number; savedAt: string } | null = null
+    for (const op of queued) {
+      const state = this.readHead()
+      if ('error' in state) return advanced
+      const head = state.head
+      const read = this.readScene(head)
+      if ('error' in read) return advanced
+      const plan = planOps(read.scene, JSON.parse(op.ops) as Op[], { opId: op.op_id, now: this.clock() })
+      if (!plan.ok) { this.settle(op.request_id, 'failed', { message: plan.message }); continue }
+      if (plan.empty) { this.settle(op.request_id, 'saved', { summary: plan.summary, warnings: plan.warnings, groups: plan.groups, via: 'server' }, head?.revision ?? 0); continue }
+      if (head && this.checkpointDue(head)) await this.writeCheckpoint(head)
+      if (this.faults.beforeCommit) throw new Error('injected fault before commit')
+
+      let last = read.lastKey
+      const inserts: Row[] = []
+      for (const [oldId, item] of plan.replaces) inserts.push({ id: item.id, key: read.keys.get(oldId) ?? (last = keyBetween(last, null)), json: JSON.stringify(serializeItem(item as PageItem)) })
+      for (const item of plan.adds) inserts.push({ id: item.id, key: (last = keyBetween(last, null)), json: JSON.stringify(serializeItem(item)) })
+      const savedAt = this.iso(), revision = (head?.revision ?? 0) + 1
+      this.ctx.storage.transactionSync(() => {
+        for (const id of [...plan.removes, ...plan.replaces.map(r => r[0])]) this.run('DELETE FROM strokes WHERE id = ?', id)
+        for (const r of inserts) this.run('INSERT OR REPLACE INTO strokes (id, key, json) VALUES (?, ?, ?)', r.id, r.key, r.json)
+        const count = this.run<{ n: number }>('SELECT COUNT(*) AS n FROM strokes')[0].n
+        this.kvPut('head', JSON.stringify({
+          format: PAGE_FORMAT, revision, saveId: `nova-${op.op_id}`, savedBy: 'nova-server', savedAt, strokeCount: count, lastCheckpointAt: head?.lastCheckpointAt ?? null,
+        } satisfies Head))
+        this.settle(op.request_id, 'saved', { summary: plan.summary, warnings: plan.warnings, groups: plan.groups, via: 'server' }, revision)
+      })
+      advanced = { revision, savedAt }
+    }
+    return advanced
+  }
+
+  /**
+   * Accepts a batch of canvas operations from NOVA. The same requestId always names the same request: a retry returns
+   * the earlier status and never applies twice. The batch is checked against the page (plus anything already queued)
+   * first, so a bad reference is refused here with a message instead of failing later.
+   */
+  enqueue(req: { requestId: string; ops: unknown; expectedRevision?: number }): Promise<Result> {
+    return this.serialize(async () => {
+      this.rowsWritten = 0
+      if (typeof req?.requestId !== 'string' || !REQUEST_ID.test(req.requestId)) return fail('INVALID_REQUEST', 'requestId must be 8 to 64 letters, digits, - or _.')
+      const existing = this.run<OpRow>('SELECT * FROM ops WHERE request_id = ?', req.requestId)[0]
+      if (existing) {
+        const drained = await this.drain()
+        const row = this.run<OpRow>('SELECT * FROM ops WHERE request_id = ?', req.requestId)[0]
+        return { ok: true, duplicate: true, ...this.opView(row), editorOpen: this.liveEditor(), advanced: drained }
+      }
+      const parsed = parseOps(req.ops)
+      if (!parsed.ok) return fail('INVALID_OPS', parsed.message)
+      const state = this.readHead()
+      if ('error' in state) return state.error
+      const revision = state.head?.revision ?? 0
+      if (req.expectedRevision !== undefined && req.expectedRevision !== revision) {
+        return fail('STALE_REVISION', `The page changed since you read it (now revision ${revision}). Read it again, then repeat the request.`, { revision })
+      }
+      const queuedCount = this.run<{ n: number }>("SELECT COUNT(*) AS n FROM ops WHERE status IN ('queued', 'applied')")[0].n
+      if (queuedCount >= MAX_QUEUED_OPS) return fail('TOO_MANY_PENDING', 'Many requests are already waiting for the notebook to open. Open the notebook first.')
+      const read = this.readScene(state.head)
+      if ('error' in read) return read.error
+      // Plan on top of what is already waiting, so a follow-up can refer to what an earlier request will create.
+      let scene: SceneInput = read.scene
+      for (const q of this.run<OpRow>("SELECT * FROM ops WHERE status IN ('queued', 'applied') ORDER BY created_at, request_id")) {
+        const p = planOps(scene, JSON.parse(q.ops) as Op[], { opId: q.op_id, now: this.clock() })
+        if (p.ok) scene = applyPlanToScene(scene, p)
+      }
+      const opId = crypto.randomUUID()
+      const plan = planOps(scene, parsed.ops, { opId, now: this.clock() })
+      if (!plan.ok) return fail('INVALID_OPS', plan.message)
+      const at = this.iso()
+      this.run('INSERT INTO ops (request_id, op_id, ops, status, created_at, applied_at, saved_at, revision, result) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?)',
+        req.requestId, opId, JSON.stringify(parsed.ops), 'queued', at, JSON.stringify({ summary: plan.summary, warnings: plan.warnings, groups: plan.groups }))
+      const advanced = await this.drain()
+      const row = this.run<OpRow>('SELECT * FROM ops WHERE request_id = ?', req.requestId)[0]
+      const old = this.run<{ request_id: string }>("SELECT request_id FROM ops WHERE status IN ('saved', 'failed') ORDER BY created_at DESC LIMIT -1 OFFSET ?", MAX_KEPT_OPS)
+      for (const o of old) this.run('DELETE FROM ops WHERE request_id = ?', o.request_id)
+      return { ok: true, ...this.opView(row), editorOpen: this.liveEditor(), advanced }
+    })
+  }
+
+  /** Where requests stand. Anything waiting is applied now if nobody is editing. */
+  opStatus(req: { requestIds?: string[] }): Promise<Result> {
+    return this.serialize(async () => {
+      const advanced = await this.drain()
+      const ids = Array.isArray(req?.requestIds) ? req.requestIds.filter(i => typeof i === 'string').slice(0, 50) : []
+      const rows = ids.length
+        ? ids.flatMap(id => this.run<OpRow>('SELECT * FROM ops WHERE request_id = ?', id))
+        : this.run<OpRow>('SELECT * FROM ops ORDER BY created_at DESC LIMIT 20')
+      return { ok: true, ops: rows.map(r => this.opView(r)), editorOpen: this.liveEditor(), advanced }
+    })
+  }
+
+  /** The editor tells the server about requests it could not apply (or that changed nothing). */
+  reportOps(req: { clientId: string; results: Array<{ requestId: string; status: 'failed' | 'noop'; message?: string }> }): Promise<Result> {
+    return this.serialize(() => {
+      if (!isUuid(req?.clientId)) return fail('INVALID_REQUEST', 'Invalid editor client id.')
+      if (this.heldByOther(req.clientId)) return fail('LEASE_HELD', 'Another device is editing this page.')
+      const state = this.readHead()
+      const revision = 'head' in state ? state.head?.revision ?? 0 : 0
+      for (const r of (Array.isArray(req.results) ? req.results : []).slice(0, 50)) {
+        if (typeof r?.requestId !== 'string') continue
+        const row = this.run<OpRow>("SELECT * FROM ops WHERE request_id = ? AND status IN ('queued', 'applied')", r.requestId)[0]
+        if (!row) continue
+        if (r.status === 'failed') this.settle(r.requestId, 'failed', { message: String(r.message ?? 'The notebook could not apply this request.').slice(0, 400), via: 'editor' })
+        else this.settle(r.requestId, 'saved', { ...JSON.parse(row.result || '{}'), via: 'editor', note: 'Already on the page.' }, revision)
+      }
+      return { ok: true }
+    })
+  }
+
+  /** What is on the page, summarised for NOVA: groups, pictures, loose ink regions, with ids and bounds. */
+  scene(): Promise<Result> {
+    return this.serialize(async () => {
+      this.rowsWritten = 0
+      const advanced = await this.drain()
+      const state = this.readHead()
+      if ('error' in state) return state.error
+      const read = this.readScene(state.head)
+      if ('error' in read) return read.error
+      const pending = this.run<{ n: number }>("SELECT COUNT(*) AS n FROM ops WHERE status IN ('queued', 'applied')")[0].n
+      return {
+        ok: true, revision: state.head?.revision ?? 0, savedAt: state.head?.savedAt ?? null, paper: this.paper(),
+        editorOpen: this.liveEditor(), pendingRequests: pending, advanced, ...describeScene(read.scene),
+      }
     })
   }
 

@@ -42,6 +42,8 @@ export type Op =
   | { op: 'ungroup'; targets: string[] }
   | { op: 'remove'; targets: string[] }
   | { op: 'duplicate'; targets: string[]; place: Place }
+  /** Puts a stored picture (a rendered source page or crop) on the page, in its own group so it keeps a stable name. */
+  | { op: 'picture'; image: string; w: number; h: number; name?: string; place: Place }
 
 export const MAX_OPS = 40
 export const NOVA_COLOR = '#7c3aed'
@@ -115,6 +117,14 @@ export function parseOps(input: unknown): { ok: true; ops: Op[] } | { ok: false;
       case 'ungroup':
       case 'remove': if (!isRefs(o.targets)) return bad('targets must list 1 to 200 ids'); break
       case 'duplicate': { if (!isRefs(o.targets)) return bad('targets must list 1 to 200 ids'); const pp = placeProblem(o.place, true); if (pp) return bad(pp); break }
+      case 'picture': {
+        if (typeof o.image !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(o.image)) return bad('image must be a stored picture id')
+        if (!isNum(o.w, 20000) || !isNum(o.h, 20000) || (o.w as number) < 8 || (o.h as number) < 8) return bad('w and h must be 8 to 20000')
+        if (o.name !== undefined && (typeof o.name !== 'string' || o.name.length > 60)) return bad('name must be 60 characters or fewer')
+        const pp = placeProblem(o.place, true)
+        if (pp) return bad(pp)
+        break
+      }
       default: return bad('unknown operation')
     }
   }
@@ -394,6 +404,17 @@ export function planOps(scene: SceneInput, ops: readonly Op[], options: { opId: 
           p.summary.push(`Removed ${t.items.length} NOVA mark(s).`)
           break
         }
+        case 'picture': {
+          const spot = placeRect(p, { w: op.w, h: op.h }, op.place, new Set())
+          if ('message' in spot) return fail(spot.message)
+          const group = p.newGroup(op.name ?? 'picture')
+          const pic = createImage({ id: p.newId(), image: op.image, x: spot.x, y: spot.y, w: op.w, h: op.h, createdAt: now, group })
+          p.append(pic)
+          const b = pic.bounds
+          p.groups.push({ id: group, name: op.name ?? 'picture', bounds: { minX: round1(b.minX), minY: round1(b.minY), maxX: round1(b.maxX), maxY: round1(b.maxY) } })
+          p.summary.push(`Placed "${op.name ?? 'picture'}" as group ${group} at x ${round1(spot.x)}, y ${round1(spot.y)}, ${Math.round(op.w)} by ${Math.round(op.h)}.`)
+          break
+        }
         case 'duplicate': {
           const t = targetsOf(p, op.targets)
           if (!t.ok) return fail(t.message)
@@ -417,6 +438,17 @@ export function planOps(scene: SceneInput, ops: readonly Op[], options: { opId: 
     return { ok: false, message: error instanceof Error ? error.message : String(error) }
   }
   return { ok: true, ...p.finish() }
+}
+
+/** The scene after a plan: replacements in place, removals gone, additions on top. Used to plan a batch on top of queued ones. */
+export function applyPlanToScene(scene: SceneInput, plan: Pick<Plan, 'adds' | 'removes' | 'replaces'>): { strokes: Stroke[]; images: ImageItem[] } {
+  const swap = new Map(plan.replaces)
+  const gone = new Set(plan.removes)
+  const keep = <T extends PageItem>(list: readonly T[]) => list.filter(i => !gone.has(i.id)).map(i => (swap.get(i.id) as T | undefined) ?? i)
+  return {
+    strokes: [...keep(scene.strokes), ...plan.adds.filter((i): i is Stroke => !isImg(i))],
+    images: [...keep(scene.images), ...plan.adds.filter(isImg)],
+  }
 }
 
 function unitsOf(p: Planner, refs: string[]): PageItem[][] | { message: string } {
