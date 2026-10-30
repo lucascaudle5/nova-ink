@@ -6,11 +6,21 @@ import { generateStrokes } from '../src/dev/generate'
 
 class FakeContext implements Context2D {
   calls: string[] = []
+  images: Array<{ dx: number; dy: number; dw: number; dh: number }> = []
+  rects = 0
   fillStyle: unknown = '#000'
+  strokeStyle: unknown = '#000'
+  lineWidth = 1
+  globalAlpha = 1
   transform: number[] = []
   setTransform(...m: number[]) { this.transform = m; this.calls.push('transform') }
   clearRect() { this.calls.push('clear') }
+  fillRect() { this.rects++ }
   fill() { this.calls.push(`fill:${String(this.fillStyle)}`) }
+  drawImage(_image: never, dx: number, dy: number, dw: number, dh: number) { this.images.push({ dx, dy, dw, dh }); this.calls.push('image') }
+  beginPath() { this.calls.push('beginPath') }
+  arc() { this.calls.push('arc') }
+  stroke() { this.calls.push('stroke') }
 }
 
 function fakeCanvas(): CanvasLike & { ctx: FakeContext } {
@@ -19,16 +29,16 @@ function fakeCanvas(): CanvasLike & { ctx: FakeContext } {
 }
 
 function setup() {
-  const base = fakeCanvas(), live = fakeCanvas()
+  const paper = fakeCanvas(), base = fakeCanvas(), live = fakeCanvas(), snapshot = fakeCanvas()
   let built = 0
-  const renderer = new CanvasRenderer(base, live, { createPath: () => ({ path: ++built }) })
+  const renderer = new CanvasRenderer({ paper, base, live, snapshot }, { createPath: () => ({ path: ++built }) })
   renderer.resize(800, 600, 2)
-  return { base, live, renderer, built: () => built }
+  return { paper, base, live, snapshot, renderer, built: () => built }
 }
 
-test('resize sets device-pixel canvas sizes', () => {
-  const { base, live } = setup()
-  assert.deepEqual([base.width, base.height, live.width, live.height], [1600, 1200, 1600, 1200])
+test('resize sets device-pixel sizes on every layer', () => {
+  const { paper, base, live, snapshot } = setup()
+  for (const c of [paper, base, live, snapshot]) assert.deepEqual([c.width, c.height], [1600, 1200])
 })
 
 test('scene draws exactly the given strokes and caches each path across redraws', () => {
@@ -58,4 +68,48 @@ test('live layer redraw touches only the live canvas', () => {
   assert.deepEqual(live.ctx.calls, ['transform', 'clear', 'transform', 'fill:#ff0000'])
   renderer.clearLive()
   assert.equal(live.ctx.calls.at(-1), 'clear')
+})
+
+test('gesture snapshot: the base shows the copy moved and scaled, with no stroke fills', () => {
+  const { base, snapshot, renderer } = setup()
+  renderer.drawScene(generateStrokes(20), { x: 0, y: 0, z: 1 })
+  assert.equal(renderer.drawFromSnapshot({ x: 0, y: 0, z: 1 }), false, 'no snapshot yet')
+  renderer.takeSnapshot({ x: 100, y: 50, z: 1 })
+  assert.deepEqual(snapshot.ctx.images, [{ dx: 0, dy: 0, dw: 1600, dh: 1200 }])
+  base.ctx.calls = []
+  assert.ok(renderer.drawFromSnapshot({ x: 90, y: 50, z: 2 }))
+  assert.deepEqual(base.ctx.calls, ['transform', 'clear', 'image'])
+  // Page point (100, 50) was at screen 0,0; at the new camera it is at (100 - 90) * 2 = 20 CSS = 40 device px.
+  assert.deepEqual(base.ctx.images.at(-1), { dx: 40, dy: 0, dw: 3200, dh: 2400 })
+})
+
+test('resizing or dropping the snapshot makes it unusable', () => {
+  const { renderer } = setup()
+  renderer.takeSnapshot({ x: 0, y: 0, z: 1 })
+  renderer.resize(400, 300, 2)
+  assert.equal(renderer.snapshotAt, null)
+  renderer.takeSnapshot({ x: 0, y: 0, z: 1 })
+  renderer.dropSnapshot()
+  assert.equal(renderer.drawFromSnapshot({ x: 0, y: 0, z: 1 }), false)
+})
+
+test('paper: fills the page color and draws pattern lines; blank draws only the fill', () => {
+  const { paper, renderer } = setup()
+  renderer.paper = { color: 'dark', pattern: 'blank' }
+  renderer.drawPaper({ x: 0, y: 0, z: 1 })
+  assert.equal(paper.ctx.rects, 1)
+  assert.equal(paper.ctx.fillStyle, '#16181c')
+  paper.ctx.rects = 0
+  renderer.paper = { color: 'white', pattern: 'graph' }
+  renderer.drawPaper({ x: 0, y: 0, z: 1 })
+  assert.ok(paper.ctx.rects > 50)
+})
+
+test('on dark paper near-black ink is shown light; colored ink is unchanged', () => {
+  const { base, renderer } = setup()
+  const [a] = generateStrokes(1)
+  renderer.paper = { color: 'slate', pattern: 'blank' }
+  renderer.drawScene([a], { x: 0, y: 0, z: 1 })
+  assert.ok(base.ctx.calls.includes('fill:#e6e8eb'))
+  assert.equal(a.style.color, '#1b1f24', 'stored color is untouched')
 })

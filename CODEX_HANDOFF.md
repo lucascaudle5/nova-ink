@@ -129,15 +129,46 @@ First iPad Safari Results file (user, October 29, 2026, 7:26 PM, over Wi-Fi):
 - `getCoalescedEvents` is **not available**; `getPredictedEvents` and `altitudeAngle` are. Without coalesced events the engine receives one Pencil sample per event, not the full hardware rate.
 - That page session recorded no pointer events, no input latency and no pan benchmark (probably drawn before a reload; metrics restart on reload). Two full redraws of 3,003 strokes took 23 and 89 ms (the larger includes building every stroke's path once). Results now include session start and restored-draft count.
 - Not yet measured on iPad: Pencil latency, pressure, samples per event, palm rejection, pan frame rate.
+- Second Results file (October 29, 2026, 7:33 PM; same iPad and Safari; one page session, 866 Pencil samples, touch also used):
+  - Pencil input to frame: p50 5 ms, p95 16 ms, max 32 ms. Criterion 1 target at 60 Hz is p95 ≤ 20.7 ms: **met in Safari**. The refresh rate was not recorded; the screen size suggests a 60 Hz 10.2-inch iPad (not confirmed).
+  - Samples per event: always 1 (no coalescing, as expected from the first file).
+  - Highest pressure seen: 0.32. Either light writing or Safari's pressure range; pressure scaling may need calibration. Not investigated.
+  - Normal use: 267 full redraws with p95 1 ms; frame p95 1 ms.
+  - Pan benchmark zoomed out (0.13×, all 3,026 strokes visible): frame interval p50 39 ms / p95 41 ms (about 25 fps), draw submit p50 21 ms. **Criterion 4b fails on iPad**, as it did on desktop. The gesture-time bitmap cache is the next fix.
+  - Not measured: pan benchmark at writing zoom, stray marks or pans from a resting palm (needs the user's report).
+- User-reported (October 29, 2026, 7:29 PM), iPad Safari over Wi-Fi: "The engine works phenomenally. It's already at par with tldraw." This meets the user-judgement part of criterion 1 in Safari only. Not yet tested inside ChatGPT, and no measured Pencil numbers back it yet.
+
+- User-reported (October 29, 2026, 7:35 PM), iPad Safari: resting a palm never left a mark or moved the canvas (criterion 6, Safari only). Thick strokes were hard to get with pressure.
+
+Engine decisions (user, October 29, 2026, 7:35 PM):
+- No pressure-based width. Strokes have one constant width, chosen from favorite widths. Pressure is still recorded with each point (raw input, for replay) but never changes how a stroke looks.
+- Goodnotes-style pen presets (user, October 29, 2026): four width slots and four color slots. Tapping a slot uses it; tapping the selected slot again opens its editor (width slider 0.5–24, or a 12-color palette, a system color picker and a hex field); tapping outside closes it. Edits apply immediately and are kept in the harness's localStorage.
+- Built: constant-width outline (test: pressure never changes width); presets in `engine/harness/presets.ts` (tested). Desktop Chromium check: selecting a slot, re-tapping to open both editors, choosing a palette color, closing by tapping the canvas, and the presets surviving in storage. Not yet tried on the iPad.
+- Image inserting: deferred to its own milestone, designed together with PDF page import (a new non-stroke item type: image storage and size limits, select/move/resize, a page format version bump, and how the eraser and Ask NOVA treat images).
+
+Engine requests (user, October 29, 2026, 7:58 PM): undo is buggy; the eraser must remove parts of strokes, not whole strokes; expand zoom; build the zoomed-out pan fix; let each page choose its paper (e.g. dark with graph lines).
+- Partial eraser: cuts each stroke's centerline where it crosses the eraser circle (crossings interpolated, so fast strokes cut cleanly) and keeps the pieces as ordinary strokes with new ids, the same style, author and time. No format change. Undo restores the original stroke at its z-order position; one eraser gesture is one step. Whole-stroke erasing stays available. Tap the selected eraser again for three sizes (6/12/24 px) and partial/whole mode.
+- Undo: the user did not say what went wrong, and no logic error was found in History. Changes made for the likely causes: buttons use `touch-action: manipulation` (iOS Safari can drop the second of two quick taps as a double-tap); Clear and +3,000 are now undoable steps (before, they wiped undo history); quick two-finger tap = undo, three-finger tap = redo (Goodnotes), ignored if the pen was used during it or less than 400 ms before. **If undo still misbehaves, the user's description of the failure is needed.**
+- Zoom: range 5%–3200% (was 10%–800%); bottom-right zoom bar with −, a percentage (tap for 100%) and +, stepping through fixed stops; Fit and the buttons animate; Ctrl/Cmd +, − and 0.
+- Zoomed-out pan fix (gesture snapshot): while a pinch, pan, wheel scroll or zoom animation runs on a heavy view (300 or more strokes in view, or a redraw over 4 ms), the ink layer shows a copy of itself moved and scaled instead of redrawing every stroke. It redraws for real when the gesture ends, and at most every 200 ms mid-gesture if the copy covers under 70% of the view or is scaled beyond 0.5–2.5×. Edits, resizes and paper changes during a gesture invalidate the copy. JavaScript draw time alone does not show the cost (Chrome reported ~1 ms per redraw while frames took 28 ms), hence the stroke-count trigger.
+- Paper per page: White, Cream, Slate or Dark, and Blank, Dots, Lined or Graph (fine lines every 20 units, major every 100). The pattern is drawn on its own layer in page coordinates, so it pans and zooms with the ink; zoomed far out it steps to coarser spacing instead of turning into a solid wash. Stored as an optional `paper` field in the page format (pages without it load as White/Blank; unknown values are refused). On dark paper near-black, colorless ink is shown light (stored color unchanged) and the toolbar switches to a dark theme.
+- Desktop Chromium (synthetic mouse events, not a Pencil): dark graph paper renders; three strokes erased through the middle became six pieces; the draft restored the six pieces and the paper after reload. Pan benchmark zoomed out (0.26×, 3,006 strokes in view, 144 Hz display): p95 frame interval 27.8 ms before → 7.2 ms with the snapshot; exact redraw after the gesture 1.8 ms. **Not yet measured on the iPad.**
+
+Engine storage decisions (user, October 29, 2026, 8:40 PM); plan in ENGINE_ARCHITECTURE.md "Engine storage plan":
+- Engine notebooks live in their own folder (`%LOCALAPPDATA%\NOVA-Ink\engine-data`), fully separate from tldraw data, which is not read, migrated or deleted.
+- A notebook holds several pages from the start. Each page is its own infinite canvas (OneNote-style tabs), not a fixed-size sheet.
+- Paper style is per page; a new page copies the previous page's style.
+- Build next: store and server tools for the engine plugin, then the ChatGPT plugin. Changing the plugin or tunnel setup still needs the user's confirmation at that step.
+- Not built yet.
 
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
-2. Where engine pages are stored: a new store/format alongside v0.2.3 (no migration needed, per the decision above). Plan it before building; it still must not alter v0.2.3 data.
+2. (Decided above: engine storage plan.)
 3. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
 4. The engine plugin in ChatGPT: a separate dev-only MCP server/connector changes the plugin/tunnel setup; confirm before it is set up.
 5. When to take down the Cloudflare test deployment (still running, see cloudflare/docs/CF_TEST_DEPLOYMENT.md).
 
-Next engine milestone (bounded): (a) gesture-time bitmap cache: during pan/pinch, transform the last rendered base layer and re-render only at gesture end or when the cache runs out, with tests for invalidation on erase/undo/resize; target p95 frame interval ≤ 2 × refresh period at fit-all on this desktop; (b) the user runs the harness on iPad Safari and exports Results for criteria 1–6; (c) record the numbers here.
+Next engine milestone (bounded): (a) the user tries the partial eraser, undo (buttons and finger taps), zoom bar and paper styles on the iPad, and runs Benchmark pan zoomed out with +3,000 strokes, then exports Results; (b) record the numbers here; (c) if undo is still wrong, reproduce it from the user's description; (d) then stroke-relative coordinates for the infinite canvas.
 
 ### Long-term foundations
 - Data ownership: documented storage formats, PDF export, and tested off-machine backups so notes outlive any app, host, or AI provider.

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { strokeOutline, pressureRadius, pointBounds } from '../src/core/geometry'
+import { strokeOutline, pointBounds } from '../src/core/geometry'
 import { fitBounds, gestureCamera, MAX_ZOOM, MIN_ZOOM, toPage, toScreen, viewportBounds, zoomAt } from '../src/core/camera'
 import { createStroke } from '../src/core/stroke'
 
@@ -12,7 +12,7 @@ function polygonWidthAt(outline: number[], x: number): number {
   return hi - lo
 }
 
-test('a single point becomes a closed dot of the pressure radius', () => {
+test('a single point becomes a closed dot of half the stroke width', () => {
   const outline = strokeOutline(pts([10, 20, 1]), 4)
   assert.ok(outline.length >= 16 * 2)
   for (let i = 0; i < outline.length; i += 2) assert.ok(Math.abs(Math.hypot(outline[i] - 10, outline[i + 1] - 20) - 2) < 1e-9)
@@ -27,12 +27,13 @@ test('outline stays within the stroke bounds padded by the radius', () => {
   }
 })
 
-test('higher pressure draws a wider line', () => {
+test('width is the chosen width everywhere; pressure never changes it', () => {
+  const varying = strokeOutline(pts(...Array.from({ length: 40 }, (_, i): [number, number, number] => [i, 0, i % 2 ? 0.05 : 1])), 8)
   const light = strokeOutline(pts(...Array.from({ length: 40 }, (_, i): [number, number, number] => [i, 0, 0.1])), 8)
-  const heavy = strokeOutline(pts(...Array.from({ length: 40 }, (_, i): [number, number, number] => [i, 0, 1])), 8)
-  assert.ok(polygonWidthAt(heavy, 20) > polygonWidthAt(light, 20) * 2)
-  assert.equal(pressureRadius(8, 1), 4)
-  assert.equal(pressureRadius(8, NaN), pressureRadius(8, 0.5))
+  for (const x of [5, 20, 33]) {
+    assert.ok(Math.abs(polygonWidthAt(varying, x) - 8) < 1e-9)
+    assert.ok(Math.abs(polygonWidthAt(light, x) - 8) < 1e-9)
+  }
 })
 
 test('the outline reaches the real lift-off point despite smoothing lag', () => {

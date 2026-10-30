@@ -1,4 +1,6 @@
 import { CodecError, fromBase64, toBase64, unzigzag, VarintReader, writeVarint, zigzag } from './codec'
+import { DEFAULT_PAPER, isPaper } from './paper'
+import type { Paper } from './paper'
 import { createStroke, MAX_POINTS_PER_STROKE } from './stroke'
 import { POINT_STRIDE } from './types'
 import type { Author, Stroke } from './types'
@@ -6,7 +8,7 @@ import type { Author, Stroke } from './types'
 /**
  * NOVA ink page format, version 1 (experimental: not used by any saved notebook yet).
  *
- * { format: "nova-ink", version: 1, strokes: [{ id, author, color, width, createdAt, n, points }] }
+ * { format: "nova-ink", version: 1, paper?: { color, pattern }, strokes: [{ id, author, color, width, createdAt, n, points }] }
  *
  * `points` is base64 of zigzag varints: for each point, the deltas from the previous point of
  * round(x * 100), round(y * 100), round(pressure * 1000) and round(dt ms). Positions are kept to
@@ -31,11 +33,13 @@ export interface SerializedStroke {
 export interface SerializedPage {
   format: typeof FORMAT
   version: typeof FORMAT_VERSION
+  /** Optional; pages without it use DEFAULT_PAPER. */
+  paper?: Paper
   strokes: SerializedStroke[]
 }
 
 export type ParseResult =
-  | { ok: true; strokes: Stroke[] }
+  | { ok: true; strokes: Stroke[]; paper: Paper }
   | { ok: false; code: 'NOT_NOVA_INK' | 'FORMAT_NEWER' | 'INVALID'; message: string }
 
 export function encodePoints(points: ArrayLike<number>): string {
@@ -82,8 +86,10 @@ export function serializeStroke(s: Stroke): SerializedStroke {
   return out
 }
 
-export function serializePage(strokes: readonly Stroke[]): SerializedPage {
-  return { format: FORMAT, version: FORMAT_VERSION, strokes: strokes.map(serializeStroke) }
+export function serializePage(strokes: readonly Stroke[], paper?: Paper): SerializedPage {
+  const page: SerializedPage = { format: FORMAT, version: FORMAT_VERSION, strokes: strokes.map(serializeStroke) }
+  if (paper) page.paper = { color: paper.color, pattern: paper.pattern }
+  return page
 }
 
 export function parsePage(data: unknown): ParseResult {
@@ -96,6 +102,8 @@ export function parsePage(data: unknown): ParseResult {
     return { ok: false, code: 'FORMAT_NEWER', message: `This page was saved by a newer NOVA Ink (format ${version}; this build reads up to ${FORMAT_VERSION}). Nothing was changed.` }
   }
   if (!Array.isArray(strokes)) return invalid('The page has no stroke list.')
+  const { paper } = data as { paper?: unknown }
+  if (paper !== undefined && !isPaper(paper)) return invalid('The page has an unknown paper style.')
   const out: Stroke[] = []
   const ids = new Set<string>()
   for (let i = 0; i < strokes.length; i++) {
@@ -116,7 +124,7 @@ export function parsePage(data: unknown): ParseResult {
     ids.add(s.id)
     out.push(createStroke({ id: s.id, author: s.author as Author, style: { color: s.color, width: s.width }, createdAt: s.createdAt, points }))
   }
-  return { ok: true, strokes: out }
+  return { ok: true, strokes: out, paper: paper ? { color: paper.color, pattern: paper.pattern } : { ...DEFAULT_PAPER } }
 }
 
 function invalid(message: string): ParseResult {

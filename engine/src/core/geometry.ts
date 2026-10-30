@@ -33,12 +33,6 @@ export function distanceToSegmentSq(px: number, py: number, ax: number, ay: numb
   return cx * cx + cy * cy
 }
 
-/** Radius at a pressure. A light touch still leaves a visible line (30% of full width). */
-export function pressureRadius(width: number, pressure: number): number {
-  const p = Number.isFinite(pressure) ? clamp(pressure, 0, 1) : 0.5
-  return (width / 2) * (0.3 + 0.7 * p)
-}
-
 export interface OutlineOptions {
   /** 0 = follow raw input exactly, towards 1 = heavier low-pass filtering. */
   smoothing?: number
@@ -49,7 +43,8 @@ export interface OutlineOptions {
 }
 
 /**
- * Filled outline polygon (flat [x0, y0, x1, y1, ...]) for a variable-width stroke.
+ * Filled outline polygon (flat [x0, y0, x1, y1, ...]) for a constant-width stroke. Pressure is
+ * recorded with each point but deliberately ignored here: the user chose fixed widths over pressure.
  * Live and committed strokes use this same function, so a stroke does not change shape on pen-up.
  */
 export function strokeOutline(points: ArrayLike<number>, width: number, options: OutlineOptions = {}): number[] {
@@ -59,26 +54,26 @@ export function strokeOutline(points: ArrayLike<number>, width: number, options:
   const n = pointCount(points)
   if (n === 0) return []
 
-  const cx: number[] = [], cy: number[] = [], cr: number[] = []
-  let sx = points[0], sy = points[1], sr = pressureRadius(width, points[2])
-  cx.push(sx); cy.push(sy); cr.push(sr)
+  const r = width / 2
+  const cx: number[] = [], cy: number[] = []
+  let sx = points[0], sy = points[1]
+  cx.push(sx); cy.push(sy)
   const follow = 1 - smoothing
   for (let i = 1; i < n; i++) {
     const o = i * POINT_STRIDE
     sx += (points[o] - sx) * follow
     sy += (points[o + 1] - sy) * follow
-    sr += (pressureRadius(width, points[o + 2]) - sr) * 0.5
     const last = cx.length - 1
     if (Math.hypot(sx - cx[last], sy - cy[last]) < minSpacing) continue
-    cx.push(sx); cy.push(sy); cr.push(sr)
+    cx.push(sx); cy.push(sy)
   }
   // The filter lags the pen; finish at the real lift-off point so strokes are not visibly short.
   const lx = points[(n - 1) * POINT_STRIDE], ly = points[(n - 1) * POINT_STRIDE + 1]
   const lastIndex = cx.length - 1
-  if (n > 1 && Math.hypot(lx - cx[lastIndex], ly - cy[lastIndex]) >= minSpacing) { cx.push(lx); cy.push(ly); cr.push(sr) }
+  if (n > 1 && Math.hypot(lx - cx[lastIndex], ly - cy[lastIndex]) >= minSpacing) { cx.push(lx); cy.push(ly) }
 
   const m = cx.length
-  if (m === 1) return circle(cx[0], cy[0], cr[0], capSegments * 2)
+  if (m === 1) return circle(cx[0], cy[0], r, capSegments * 2)
 
   const nx = new Array<number>(m), ny = new Array<number>(m)
   let px = 0, py = -1
@@ -91,10 +86,10 @@ export function strokeOutline(points: ArrayLike<number>, width: number, options:
   }
 
   const out: number[] = []
-  for (let i = 0; i < m; i++) out.push(cx[i] + nx[i] * cr[i], cy[i] + ny[i] * cr[i])
-  cap(out, cx[m - 1], cy[m - 1], cr[m - 1], nx[m - 1], ny[m - 1], ny[m - 1], -nx[m - 1], capSegments)
-  for (let i = m - 1; i >= 0; i--) out.push(cx[i] - nx[i] * cr[i], cy[i] - ny[i] * cr[i])
-  cap(out, cx[0], cy[0], cr[0], -nx[0], -ny[0], -ny[0], nx[0], capSegments)
+  for (let i = 0; i < m; i++) out.push(cx[i] + nx[i] * r, cy[i] + ny[i] * r)
+  cap(out, cx[m - 1], cy[m - 1], r, nx[m - 1], ny[m - 1], ny[m - 1], -nx[m - 1], capSegments)
+  for (let i = m - 1; i >= 0; i--) out.push(cx[i] - nx[i] * r, cy[i] - ny[i] * r)
+  cap(out, cx[0], cy[0], r, -nx[0], -ny[0], -ny[0], nx[0], capSegments)
   return out
 }
 

@@ -18,6 +18,8 @@ function rig(camera: Camera = { x: 0, y: 0, z: 1 }) {
     eraseBegin: () => log.push('eraseBegin'),
     eraseAt: (x, y, r) => erased.push([x, y, r]),
     eraseEnd: () => log.push('eraseEnd'),
+    undo: () => log.push('undo'),
+    redo: () => log.push('redo'),
   }
   const input = new InputController(handlers)
   const send = (phase: PointerInput['phase'], kind: PointerKind, id: number, ...xy: Array<[number, number]>) =>
@@ -106,6 +108,53 @@ test('mouse primary button draws; other buttons and second pointers do not', () 
   send('move', 'pen', 2, [10, 10])
   send('up', 'mouse', 1, [1, 1])
   assert.deepEqual(log, ['begin', 'extend1', 'end'])
+})
+
+function touchAt(input: InputController, phase: PointerInput['phase'], id: number, x: number, y: number, t: number) {
+  input.handle({ phase, kind: 'touch', id, samples: [{ x, y, pressure: 0, t }] })
+}
+function pen(input: InputController, phase: PointerInput['phase'], t: number) {
+  input.handle({ phase, kind: 'pen', id: 99, samples: [{ x: 500, y: 500, pressure: 0.5, t }] })
+}
+
+test('a quick two-finger tap undoes and a three-finger tap redoes, without moving the view', () => {
+  const { input, log, state } = rig()
+  touchAt(input, 'down', 1, 100, 100, 1000)
+  touchAt(input, 'down', 2, 200, 100, 1010)
+  touchAt(input, 'move', 2, 204, 101, 1050)
+  touchAt(input, 'up', 1, 100, 100, 1100)
+  touchAt(input, 'up', 2, 204, 101, 1120)
+  assert.equal(log.filter(e => e === 'undo').length, 1)
+  assert.deepEqual(state.camera, { x: 0, y: 0, z: 1 })
+  for (const id of [1, 2, 3]) touchAt(input, 'down', id, id * 50, 100, 2000)
+  for (const id of [1, 2, 3]) touchAt(input, 'up', id, id * 50, 100, 2100)
+  assert.equal(log.filter(e => e === 'redo').length, 1)
+})
+
+test('pinching, slow taps, one finger and the palm near the pen never undo', () => {
+  const { input, log } = rig()
+  touchAt(input, 'down', 1, 100, 100, 0)
+  touchAt(input, 'down', 2, 200, 100, 0)
+  touchAt(input, 'move', 2, 260, 100, 50)
+  touchAt(input, 'up', 1, 100, 100, 100)
+  touchAt(input, 'up', 2, 260, 100, 100)
+  touchAt(input, 'down', 1, 100, 100, 1000)
+  touchAt(input, 'down', 2, 200, 100, 1000)
+  touchAt(input, 'up', 1, 100, 100, 1600)
+  touchAt(input, 'up', 2, 200, 100, 1600)
+  touchAt(input, 'down', 1, 100, 100, 2000)
+  touchAt(input, 'up', 1, 100, 100, 2050)
+  pen(input, 'down', 3000); pen(input, 'up', 3100)
+  touchAt(input, 'down', 1, 100, 100, 3200)
+  touchAt(input, 'down', 2, 200, 100, 3200)
+  touchAt(input, 'up', 1, 100, 100, 3250)
+  touchAt(input, 'up', 2, 200, 100, 3250)
+  touchAt(input, 'down', 1, 100, 100, 5000)
+  touchAt(input, 'down', 2, 200, 100, 5000)
+  pen(input, 'down', 5050); pen(input, 'up', 5080)
+  touchAt(input, 'up', 1, 100, 100, 5100)
+  touchAt(input, 'up', 2, 200, 100, 5100)
+  assert.ok(!log.includes('undo') && !log.includes('redo'), log.join(','))
 })
 
 test('eraser covers fast movements with overlapping hits and a zoom-independent screen radius', () => {

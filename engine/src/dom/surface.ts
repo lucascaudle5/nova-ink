@@ -1,11 +1,12 @@
-import { fitBounds, viewportBounds, zoomAt, panBy } from '../core/camera'
+import { fitBounds, interpolateCamera, nextZoomStep, panBy, toScreen, viewCoverage, viewportBounds, zoomAt } from '../core/camera'
 import { InkDocument } from '../core/document'
 import type { DocumentChange } from '../core/document'
-import { strokesHitBy } from '../core/eraser'
+import { eraseFromStroke, strokesHitBy } from '../core/eraser'
 import { History } from '../core/history'
 import { InputController } from '../core/input'
 import type { PointerInput, PointerKind, Tool } from '../core/input'
 import { Samples } from '../core/metrics'
+import type { Paper } from '../core/paper'
 import { createStroke } from '../core/stroke'
 import type { Camera, Stroke, StrokeStyle } from '../core/types'
 import { CanvasRenderer, createPath2D } from '../render/renderer'
@@ -17,6 +18,8 @@ export interface SurfaceMetrics {
   frameMs: Samples
   /** Full base-layer redraws (pan, zoom, erase, undo). */
   sceneMs: Samples
+  /** Frame time while a pan/zoom gesture, wheel scroll or zoom animation runs. */
+  gestureFrameMs: Samples
   /** Samples delivered per pen/mouse move event (more than 1 means coalesced events are working). */
   samplesPerEvent: Samples
 }
@@ -31,21 +34,50 @@ export interface Capabilities {
   penSamples: number
 }
 
+/** 'partial' cuts away only what the eraser covers; 'stroke' removes every stroke it touches. */
+export type EraserMode = 'partial' | 'stroke'
+
+export interface PanBenchmark {
+  intervals: Samples
+  drawMs: Samples
+  /** Strokes in view at the start (the heaviest full redraw the gesture would otherwise repeat). */
+  drawn: number
+  /** True when frames were drawn from the gesture snapshot rather than by redrawing strokes. */
+  cached: boolean
+  /** The exact redraw after the gesture ends. */
+  finalRedrawMs: number
+}
+
 /**
- * Browser binding for the engine: stacks two canvases in `container`, routes pointer events through
- * InputController and draws with CanvasRenderer once per animation frame. Contains no notebook,
- * storage, ChatGPT or hosting logic.
+ * Use the gesture snapshot only on heavy views; light pages stay exact. Script time alone misses
+ * the cost (browsers rasterize paths later, off the main thread), so stroke count also decides.
+ */
+const SNAPSHOT_WHEN_SCENE_MS = 4
+const SNAPSHOT_WHEN_STROKES = 300
+/** Redraw for real (at most every REFRESH_MS) once the snapshot covers too little or is scaled too far. */
+const MIN_COVERAGE = 0.7
+const MIN_SCALE = 0.5
+const MAX_SCALE = 2.5
+const REFRESH_MS = 200
+const WHEEL_IDLE_MS = 150
+
+interface Interaction { sources: Set<string>; snapshot: boolean; stale: boolean; refreshedAt: number }
+
+/**
+ * Browser binding for the engine: stacks paper, ink and live canvases in `container`, routes pointer
+ * events through InputController and draws with CanvasRenderer once per animation frame. Contains no
+ * notebook, storage, ChatGPT or hosting logic.
  */
 export class InkSurface {
   readonly doc = new InkDocument()
   readonly history = new History(this.doc)
-  readonly metrics: SurfaceMetrics = { inputToFrameMs: new Samples(), frameMs: new Samples(), sceneMs: new Samples(), samplesPerEvent: new Samples() }
+  readonly metrics: SurfaceMetrics = { inputToFrameMs: new Samples(), frameMs: new Samples(), sceneMs: new Samples(), gestureFrameMs: new Samples(), samplesPerEvent: new Samples() }
   camera: Camera = { x: 0, y: 0, z: 1 }
   style: StrokeStyle = { color: '#1b1f24', width: 2.6 }
+  eraserMode: EraserMode = 'partial'
   lastDrawnCount = 0
 
-  private readonly baseCanvas: HTMLCanvasElement
-  private readonly liveCanvas: HTMLCanvasElement
+  private readonly canvases: HTMLCanvasElement[] = []
   private readonly renderer: CanvasRenderer
   private readonly input: InputController
   private readonly observer: ResizeObserver
@@ -53,6 +85,8 @@ export class InkSurface {
   private readonly listeners = new Set<() => void>()
   private live: number[] | null = null
   private liveStart = 0
+  private eraser: { x: number; y: number; r: number } | null = null
+  private needsPaper = true
   private needsScene = true
   private needsLive = false
   private incremental: Stroke[] = []
@@ -64,14 +98,17 @@ export class InkSurface {
   private seen = new Set<string>()
   private maxPressure = 0
   private penSamples = 0
+  private lastSceneMs = 0
+  private interaction: Interaction | null = null
+  private wheelTimer: ReturnType<typeof setTimeout> | null = null
+  private animation: { raf: number; target: Camera } | null = null
 
   constructor(private readonly container: HTMLElement) {
     container.classList.add('nova-ink-surface')
     Object.assign(container.style, { position: 'relative', overflow: 'hidden', touchAction: 'none', userSelect: 'none', webkitUserSelect: 'none' })
     container.style.setProperty('-webkit-touch-callout', 'none')
-    this.baseCanvas = this.makeCanvas()
-    this.liveCanvas = this.makeCanvas()
-    this.renderer = new CanvasRenderer(this.baseCanvas, this.liveCanvas, { createPath: createPath2D })
+    const paper = this.makeCanvas(), base = this.makeCanvas(), live = this.makeCanvas()
+    this.renderer = new CanvasRenderer({ paper, base, live, snapshot: document.createElement('canvas') }, { createPath: createPath2D })
     this.input = new InputController({
       getCamera: () => this.camera,
       setCamera: camera => this.setCamera(camera),
@@ -88,13 +125,20 @@ export class InkSurface {
         this.needsLive = true
         if (points?.length) this.history.addStroke(createStroke({ points, style: this.style }))
         this.schedule()
+        // The document change notifies before History drops the redo steps; tell listeners again.
+        this.notify()
       },
       eraseBegin: () => this.history.beginGroup(),
-      eraseAt: (x, y, radius) => {
-        const hits = strokesHitBy(this.doc, x, y, radius)
-        if (hits.length) this.history.erase(hits.map(s => s.id))
+      eraseAt: (x, y, radius) => this.eraseAt(x, y, radius),
+      eraseEnd: () => {
+        this.history.endGroup()
+        this.eraser = null
+        this.needsLive = true
+        this.schedule()
+        this.notify()
       },
-      eraseEnd: () => this.history.endGroup(),
+      undo: () => this.undo(),
+      redo: () => this.redo(),
     })
     this.doc.onChange(change => this.onDocumentChange(change))
 
@@ -121,6 +165,17 @@ export class InkSurface {
   get tool(): Tool { return this.input.tool }
   setTool(tool: Tool): void { this.input.tool = tool; this.notify() }
 
+  get eraserRadiusPx(): number { return this.input.eraserRadiusPx }
+  set eraserRadiusPx(px: number) { this.input.eraserRadiusPx = px }
+
+  get paper(): Paper { return this.renderer.paper }
+  setPaper(paper: Paper): void {
+    this.renderer.paper = { color: paper.color, pattern: paper.pattern }
+    this.needsPaper = true
+    this.invalidateScene()
+    this.notify()
+  }
+
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
@@ -136,16 +191,50 @@ export class InkSurface {
     this.notify()
   }
 
+  /** Adds strokes as one undoable step. */
+  addStrokes(strokes: readonly Stroke[]): void { this.history.addStrokes(strokes); this.notify() }
+
+  /** Erases everything as one undoable step. */
+  clearPage(): void { this.history.erase(this.doc.strokes.map(s => s.id)); this.notify() }
+
   setCamera(camera: Camera): void {
     this.camera = camera
+    this.needsPaper = true
     this.needsScene = true
     this.schedule()
     this.notify()
   }
 
-  fitToContent(): void {
+  /** Smoothly moves to `target`; a new animation or a finger gesture takes over from this one. */
+  animateCamera(target: Camera, ms = 220): void {
+    this.stopAnimation()
+    const from = this.camera
+    const start = performance.now()
+    this.beginInteraction('animation')
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / ms)
+      const eased = 1 - Math.pow(1 - t, 3)
+      this.setCamera(t >= 1 ? target : interpolateCamera(from, target, eased, this.widthCss, this.heightCss))
+      if (t < 1 && this.animation) this.animation.raf = requestAnimationFrame(step)
+      else this.stopAnimation()
+    }
+    this.animation = { raf: requestAnimationFrame(step), target }
+  }
+
+  /** Zooms about the centre of the view. */
+  zoomTo(z: number, animate = true): void {
+    const target = zoomAt(this.animation?.target ?? this.camera, this.widthCss / 2, this.heightCss / 2, z)
+    if (animate) this.animateCamera(target)
+    else this.setCamera(target)
+  }
+
+  zoomStep(direction: 1 | -1): void { this.zoomTo(nextZoomStep((this.animation?.target ?? this.camera).z, direction)) }
+
+  fitToContent(animate = false): void {
     const bounds = this.doc.contentBounds()
-    this.setCamera(bounds ? fitBounds(bounds, this.widthCss, this.heightCss) : { x: 0, y: 0, z: 1 })
+    const target = bounds ? fitBounds(bounds, this.widthCss, this.heightCss) : { x: 0, y: 0, z: 1 }
+    if (animate) this.animateCamera(target)
+    else this.setCamera(target)
   }
 
   capabilities(): Capabilities {
@@ -162,28 +251,37 @@ export class InkSurface {
   }
 
   /**
-   * Pans by `stepPx` per frame for `frames` animation frames and records the interval between frames.
-   * Intervals above the display's refresh period (8.3 ms at 120 Hz, 16.7 ms at 60 Hz) are dropped frames.
-   * No pixel readback is used: in Chrome, readbacks can move a canvas to software rendering.
+   * Pans by `stepPx` per frame for `frames` animation frames through the same path a finger pan uses
+   * (including the gesture snapshot), and records the interval between frames. Intervals above the
+   * display's refresh period (8.3 ms at 120 Hz, 16.7 ms at 60 Hz) are dropped frames. No pixel
+   * readback is used: in Chrome, readbacks can move a canvas to software rendering.
    */
-  benchmarkPan(frames = 90, stepPx = 6): Promise<{ intervals: Samples; drawMs: Samples; drawn: number }> {
+  benchmarkPan(frames = 90, stepPx = 6): Promise<PanBenchmark> {
     const intervals = new Samples(frames), drawMs = new Samples(frames)
+    this.stopAnimation()
     const start = this.camera
-    let previous: number | null = null, i = 0, drawn = 0
+    const drawn = this.doc.query(viewportBounds(start, this.widthCss, this.heightCss)).length
+    if (this.needsScene) this.render()
+    this.beginInteraction('benchmark')
+    const cached = this.interaction?.snapshot ?? false
+    let previous: number | null = null, i = 0
     return new Promise(resolve => {
       const step = (time: number) => {
         if (previous !== null) intervals.push(time - previous)
         previous = time
         if (i++ >= frames) {
-          this.setCamera(start)
-          resolve({ intervals, drawMs, drawn })
+          this.camera = start
+          this.needsPaper = true
+          this.endInteraction('benchmark')
+          const finalRedrawMs = this.render()
+          resolve({ intervals, drawMs, drawn, cached, finalRedrawMs })
           return
         }
         const direction = i <= frames / 2 ? 1 : -1
         this.camera = panBy(this.camera, -stepPx * direction, 0)
-        const visible = this.doc.query(viewportBounds(this.camera, this.widthCss, this.heightCss))
-        drawn = Math.max(drawn, visible.length)
-        drawMs.push(this.renderer.drawScene(visible, this.camera).ms)
+        this.needsPaper = true
+        this.needsScene = true
+        drawMs.push(this.render())
         requestAnimationFrame(step)
       }
       requestAnimationFrame(step)
@@ -192,17 +290,68 @@ export class InkSurface {
 
   destroy(): void {
     if (this.raf !== null) cancelAnimationFrame(this.raf)
+    this.stopAnimation()
+    if (this.wheelTimer) clearTimeout(this.wheelTimer)
     this.observer.disconnect()
     for (const fn of this.cleanup) fn()
-    this.baseCanvas.remove()
-    this.liveCanvas.remove()
+    for (const canvas of this.canvases) canvas.remove()
     this.listeners.clear()
+  }
+
+  private eraseAt(x: number, y: number, radius: number) {
+    this.eraser = { x, y, r: radius }
+    this.needsLive = true
+    this.schedule()
+    const hits = strokesHitBy(this.doc, x, y, radius)
+    if (!hits.length) return
+    if (this.eraserMode === 'stroke') { this.history.erase(hits.map(s => s.id)); return }
+    for (const stroke of hits) {
+      const pieces = eraseFromStroke(stroke, x, y, radius)
+      if (pieces) this.history.cut(stroke.id, pieces)
+    }
+  }
+
+  private beginInteraction(source: string) {
+    if (this.interaction) { this.interaction.sources.add(source); return }
+    const snapshot = this.lastSceneMs > SNAPSHOT_WHEN_SCENE_MS || this.lastDrawnCount >= SNAPSHOT_WHEN_STROKES
+    // Stale: the first gesture frame redraws for real and takes the snapshot from that.
+    this.interaction = { sources: new Set([source]), snapshot, stale: true, refreshedAt: -Infinity }
+    if (snapshot && !this.needsScene && !this.incremental.length) {
+      this.renderer.takeSnapshot(this.camera)
+      this.interaction.stale = false
+      this.interaction.refreshedAt = performance.now()
+    }
+  }
+
+  private endInteraction(source: string) {
+    const interaction = this.interaction
+    if (!interaction) return
+    interaction.sources.delete(source)
+    if (interaction.sources.size) return
+    this.interaction = null
+    this.renderer.dropSnapshot()
+    if (interaction.snapshot) { this.needsScene = true; this.schedule() }
+  }
+
+  private stopAnimation() {
+    if (!this.animation) return
+    cancelAnimationFrame(this.animation.raf)
+    this.animation = null
+    this.endInteraction('animation')
+  }
+
+  private invalidateScene() {
+    if (this.interaction) this.interaction.stale = true
+    this.needsScene = true
+    this.incremental = []
+    this.schedule()
   }
 
   private makeCanvas(): HTMLCanvasElement {
     const canvas = document.createElement('canvas')
     Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', display: 'block', pointerEvents: 'none' })
     this.container.appendChild(canvas)
+    this.canvases.push(canvas)
     return canvas
   }
 
@@ -212,9 +361,9 @@ export class InkSurface {
     this.widthCss = Math.max(1, rect.width)
     this.heightCss = Math.max(1, rect.height)
     this.renderer.resize(this.widthCss, this.heightCss, window.devicePixelRatio || 1)
-    this.needsScene = true
+    this.needsPaper = true
     this.needsLive = true
-    this.schedule()
+    this.invalidateScene()
   }
 
   private onPointer(phase: PointerInput['phase'], e: PointerEvent) {
@@ -224,6 +373,7 @@ export class InkSurface {
     if (phase === 'down') {
       this.rect = this.container.getBoundingClientRect()
       try { this.container.setPointerCapture(e.pointerId) } catch { /* pointer already gone */ }
+      if (kind === 'touch') this.stopAnimation()
     }
     const rect = this.rect ?? this.container.getBoundingClientRect()
     const events = phase === 'move' && typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : []
@@ -238,8 +388,10 @@ export class InkSurface {
       this.penSamples += samples.length
       for (const s of samples) if (s.pressure > this.maxPressure) this.maxPressure = s.pressure
     }
-    const wasInking = this.input.inking
+    const wasInking = this.input.inking, wasNavigating = this.input.navigating
     this.input.handle({ phase, id: e.pointerId, kind, button: e.button, samples })
+    if (!wasNavigating && this.input.navigating) this.beginInteraction('touch')
+    if (wasNavigating && !this.input.navigating) this.endInteraction('touch')
     if (kind !== 'touch' && (wasInking || this.input.inking)) {
       if (phase === 'move') this.metrics.samplesPerEvent.push(samples.length)
       this.pendingEventTimes.push(e.timeStamp)
@@ -249,6 +401,10 @@ export class InkSurface {
 
   private onWheel(e: WheelEvent) {
     e.preventDefault()
+    this.stopAnimation()
+    this.beginInteraction('wheel')
+    if (this.wheelTimer) clearTimeout(this.wheelTimer)
+    this.wheelTimer = setTimeout(() => { this.wheelTimer = null; this.endInteraction('wheel') }, WHEEL_IDLE_MS)
     const rect = this.container.getBoundingClientRect()
     const scale = e.deltaMode === 1 ? 16 : 1
     if (e.ctrlKey || e.metaKey) this.setCamera(zoomAt(this.camera, e.clientX - rect.left, e.clientY - rect.top, this.camera.z * Math.exp(-e.deltaY * scale * 0.01)))
@@ -257,8 +413,8 @@ export class InkSurface {
 
   private onDocumentChange(change: DocumentChange) {
     const appended = !change.reset && !change.removed.length && change.added.every(p => p.index >= this.doc.size - change.added.length)
-    if (appended && !this.needsScene) this.incremental.push(...change.added.map(p => p.stroke))
-    else { this.needsScene = true; this.incremental = [] }
+    if (appended && !this.needsScene && !this.interaction) this.incremental.push(...change.added.map(p => p.stroke))
+    else this.invalidateScene()
     this.schedule()
     this.notify()
   }
@@ -269,11 +425,18 @@ export class InkSurface {
 
   private frame() {
     this.raf = null
+    this.render()
+    const end = performance.now()
+    for (const t of this.pendingEventTimes) this.metrics.inputToFrameMs.push(end - t)
+    this.pendingEventTimes = []
+  }
+
+  /** Draws whatever is out of date and returns the time it took. */
+  private render(): number {
     const start = performance.now()
+    if (this.needsPaper) { this.renderer.drawPaper(this.camera); this.needsPaper = false }
     if (this.needsScene) {
-      const visible = this.doc.query(viewportBounds(this.camera, this.widthCss, this.heightCss))
-      this.metrics.sceneMs.push(this.renderer.drawScene(visible, this.camera).ms)
-      this.lastDrawnCount = visible.length
+      if (!this.drawFromSnapshot(start)) this.drawFullScene()
       this.needsScene = false
       this.incremental = []
     } else if (this.incremental.length) {
@@ -283,13 +446,41 @@ export class InkSurface {
     }
     if (this.needsLive) {
       if (this.live) this.renderer.drawLive(this.live, this.style, this.camera)
-      else this.renderer.clearLive()
+      else if (this.eraser) {
+        const p = toScreen(this.camera, this.eraser.x, this.eraser.y)
+        this.renderer.drawEraser(p.x, p.y, this.eraser.r * this.camera.z)
+      } else this.renderer.clearLive()
       this.needsLive = false
     }
-    const end = performance.now()
-    this.metrics.frameMs.push(end - start)
-    for (const t of this.pendingEventTimes) this.metrics.inputToFrameMs.push(end - t)
-    this.pendingEventTimes = []
+    const ms = performance.now() - start
+    this.metrics.frameMs.push(ms)
+    if (this.interaction) this.metrics.gestureFrameMs.push(ms)
+    return ms
+  }
+
+  private drawFullScene() {
+    const visible = this.doc.query(viewportBounds(this.camera, this.widthCss, this.heightCss))
+    const { ms } = this.renderer.drawScene(visible, this.camera)
+    this.metrics.sceneMs.push(ms)
+    this.lastSceneMs = ms
+    this.lastDrawnCount = visible.length
+  }
+
+  /** During a heavy gesture: reuse the snapshot, refreshing it when stale or stretched too far. */
+  private drawFromSnapshot(now: number): boolean {
+    const interaction = this.interaction
+    if (!interaction?.snapshot) return false
+    const snap = this.renderer.snapshotAt
+    const scale = snap ? this.camera.z / snap.z : 1
+    const worn = !snap || viewCoverage(snap, this.camera, this.widthCss, this.heightCss) < MIN_COVERAGE || scale < MIN_SCALE || scale > MAX_SCALE
+    if (interaction.stale || (worn && now - interaction.refreshedAt >= REFRESH_MS)) {
+      this.drawFullScene()
+      this.renderer.takeSnapshot(this.camera)
+      interaction.stale = false
+      interaction.refreshedAt = now
+      return true
+    }
+    return this.renderer.drawFromSnapshot(this.camera)
   }
 
   private notify() { for (const listener of this.listeners) listener() }

@@ -79,12 +79,25 @@ test('parsing refuses rather than guesses', () => {
     [{ ...good, strokes: [{ ...good.strokes[0], n: good.strokes[0].n - 1 }] }, 'INVALID'],
     [{ ...good, strokes: [{ ...good.strokes[0], points: good.strokes[0].points.slice(0, -4) }] }, 'INVALID'],
     [{ ...good, strokes: [{ ...good.strokes[0], id: '../x' }] }, 'INVALID'],
+    [{ ...good, paper: { color: 'neon', pattern: 'graph' } }, 'INVALID'],
+    [{ ...good, paper: 'dark' }, 'INVALID'],
   ]
   for (const [data, code] of variants) {
     const result = parsePage(data)
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.code, code, JSON.stringify(data)?.slice(0, 80))
   }
+})
+
+test('paper round-trips, and pages saved without paper load with the default', () => {
+  const strokes = generateStrokes(2)
+  const withPaper = parsePage(JSON.parse(JSON.stringify(serializePage(strokes, { color: 'dark', pattern: 'graph' }))))
+  assert.ok(withPaper.ok)
+  if (withPaper.ok) assert.deepEqual(withPaper.paper, { color: 'dark', pattern: 'graph' })
+  const without = parsePage(JSON.parse(JSON.stringify(serializePage(strokes))))
+  assert.ok(without.ok)
+  if (without.ok) assert.deepEqual(without.paper, { color: 'white', pattern: 'blank' })
+  assert.equal('paper' in serializePage(strokes), false)
 })
 
 test('decoding rejects out-of-range pressure and negative time', () => {

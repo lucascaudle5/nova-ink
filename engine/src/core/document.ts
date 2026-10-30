@@ -39,6 +39,31 @@ export class InkDocument {
     this.emit({ added: [{ stroke, index: this.list.length - 1 }], removed: [], reset: false })
   }
 
+  /** Appends several strokes as one change. */
+  addMany(strokes: readonly Stroke[]): void {
+    if (!strokes.length) return
+    this.assertNew(strokes)
+    const first = this.list.length
+    for (const stroke of strokes) { this.list.push(stroke); this.byId.set(stroke.id, stroke) }
+    this.emit({ added: strokes.map((stroke, k) => ({ stroke, index: first + k })), removed: [], reset: false })
+  }
+
+  /**
+   * Swaps one stroke for `pieces` at the same z-order position (partial erase). Returns the removed
+   * stroke with its index, or null if `id` is unknown.
+   */
+  replace(id: string, pieces: readonly Stroke[]): Placed | null {
+    const index = this.list.findIndex(s => s.id === id)
+    if (index < 0) return null
+    this.assertNew(pieces)
+    const stroke = this.list[index]
+    this.list.splice(index, 1, ...pieces)
+    this.byId.delete(id)
+    for (const piece of pieces) this.byId.set(piece.id, piece)
+    this.emit({ added: pieces.map((piece, k) => ({ stroke: piece, index: index + k })), removed: [{ stroke, index }], reset: false })
+    return { stroke, index }
+  }
+
   /** Removes strokes by id. Returns what was removed with original indices, ascending. Unknown ids are ignored. */
   remove(ids: Iterable<string>): Placed[] {
     const wanted = new Set(ids)

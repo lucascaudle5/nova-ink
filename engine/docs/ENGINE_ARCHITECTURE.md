@@ -58,10 +58,16 @@ Renderer is behind a small interface (`Context2D`, `createPath`), so a WebGL ren
 ## 5. Spike design decisions (reversible)
 
 - **Raw input is the record.** Strokes store every coalesced sample (x, y, pressure, ms since start). Smoothing and width are computed at render time, so better rendering later never rewrites saved work, and the timing data supports replay (decision 11).
+- **Constant width, no pressure styling** (user decision): each stroke has one width, chosen from four width presets (tap the selected one again to adjust it), alongside four color presets. Pressure is recorded but ignored when drawing.
 - **Same outline for live and committed strokes**, so nothing changes shape at pen-up. Live layer redraws only the stroke in progress; committing draws one stroke onto the base layer (tested: no clear, one fill).
 - **Strokes are immutable** (frozen, private Float32 copy). Undo/redo stores references; erase restores original z-order (tested). Encoded strokes are cached, so autosave cost is proportional to new strokes.
 - **Fingers never draw.** One finger pans, two pan and zoom, computed from the gesture start (no drift). Pen-down cancels a finger gesture already in progress and touches landing during a stroke stay ignored until lifted (tested, including a mutation check). A system `pointercancel` keeps the stroke.
-- **Whole-stroke eraser** with a fixed screen-size radius and interpolation for fast moves; one gesture is one undo step.
+- **Partial eraser** (user decision): cuts a stroke's centerline where it crosses the eraser circle widened by half the stroke width, interpolating the crossing between samples; the pieces are new immutable strokes (new ids; style, author and time kept) placed at the original z-order position. No format change. Whole-stroke mode stays as an option. Fixed screen-size radius (6/12/24 px) with interpolation for fast moves; one gesture is one undo step (tested).
+- **Undo** covers strokes, erases, Clear and bulk adds. A quick two-finger tap undoes, three fingers redo; taps during or within 400 ms of pen use are ignored as the palm (tested).
+- **Layers:** paper (color and pattern, page coordinates, redrawn exactly every camera change; coarser spacing when zoomed out), base (committed ink), live (stroke in progress or eraser ring), and an offscreen snapshot of the base.
+- **Gesture snapshot** (criterion 4b): on heavy views (≥ 300 strokes in view or a redraw over 4 ms), pans, pinches, wheel scrolls and zoom animations show the snapshot moved and scaled; the ink is redrawn exactly when the gesture ends, and mid-gesture at most every 200 ms if the snapshot covers under 70% of the view or is scaled beyond 0.5–2.5×. Exposed edges show paper until then. Edits, resizes and paper changes invalidate it. Light views always redraw exactly. Stroke count is part of the trigger because Chrome's script-side draw time (~1 ms) hides the real raster cost.
+- **Zoom** 5%–3200% with fixed stops for buttons and animated camera moves (geometric zoom, straight-line centre).
+- **Paper** is page data (optional `paper` field in the format). On dark paper near-black neutral ink is displayed light; the stored color never changes.
 - **Precision.** In-memory points are Float32: under 0.004 page-unit error up to 100,000 units from the origin (tested); camera math is float64. The page format quantizes to 0.01 page units and 0.001 pressure. The user chose an infinite canvas, so far from the origin Float32 degrades (about 0.06 units at 1,000,000). Planned fix: store each stroke's points relative to a float64 stroke origin.
 - **Format `nova-ink` v1**: versioned JSON, per-stroke base64 of zigzag delta varints. Parsing refuses non-NOVA data, newer versions, duplicates, bad counts, truncation, out-of-range values ("refuse rather than guess", tested). Not used for any real notebook.
 - **Ids** use `crypto.getRandomValues`, because `crypto.randomUUID` is unavailable over plain HTTP (iPad on LAN).
@@ -76,7 +82,7 @@ Renderer is behind a small interface (`Context2D`, `createPath`), so a WebGL ren
 | 2 | No dropped samples | every delivered sample stored | unit test; harness `samples/event` | tested in Node |
 | 3 | Writing at 3,000 strokes | p95 frame time below refresh period while writing | harness frame ms | not measured on iPad |
 | 4a | Pan at writing zoom (~1×), 3,000-stroke page | p95 frame interval ≤ refresh period | Benchmark pan | desktop: 7.1 ms at 144 Hz, 867 strokes visible: pass |
-| 4b | Pan zoomed out, all 3,000 visible | p95 frame interval ≤ 2 × refresh period | Benchmark pan | **desktop: 27.9 ms: fails**; needs a gesture-time bitmap cache or level of detail |
+| 4b | Pan zoomed out, all 3,000 visible | p95 frame interval ≤ 2 × refresh period | Benchmark pan | desktop: 27.9 ms without the gesture snapshot; **7.2 ms with it** (0.26×, 3,006 strokes, 144 Hz): pass on desktop. iPad was 41 ms before the snapshot; not re-measured |
 | 5 | Commit cost independent of page size | one stroke drawn per commit | unit test | tested |
 | 6 | Palm rejection | 0 ink from fingers; 0 unwanted pans while writing with a resting palm for 2 min | unit tests + user iPad session | tested in Node; iPad not tested |
 | 7 | Page size, 3,000 strokes | ≤ 4 MiB (tldraw fixture: 3.9 MiB; save limit 12 MiB) | `npm test`, bench | 2.17 MiB |
@@ -96,19 +102,33 @@ Harness in Chromium (1904 × 997 CSS px canvas, dpr 1):
 |---|---|---|---|
 | Writing zoom (0.98×) | 867 | 6.9 / 7.1 ms (144 Hz, no drops) | 0.4 ms |
 | Fit all (0.24×) | 3,004 | 27.7 / 27.9 ms (~36 fps) | 1.1 ms |
+| Fit all (0.26×), gesture snapshot | 3,006 | 6.9 / 7.2 ms (144 Hz, no drops) | 0.1 ms; exact redraw after the gesture 1.8 ms |
 
 Submit time is small; the cost is GPU/compositor rasterization of thousands of filled paths. Input in this session was synthetic (`dispatchEvent`), which has no coalesced samples and no real latency; criterion 1 is therefore unmeasured.
 
 ## 8. Migration strategy
 
 1. **Now (done):** engine in `engine/` on `engine/spike`, in its own worktree (`..\nova-ink-engine`). The v0.2.3 checkout, its tests, server, tunnel and data are untouched. A self-contained package (like `cloudflare/`) keeps the engine independently testable while staying in the same repo for later integration; a separate repository would make the eventual `EditorPort` integration and shared tests harder.
-2. **Device spike:** measure the harness on iPad Safari, then inside ChatGPT next to tldraw. Fix zoomed-out pan (criterion 4b).
+2. **Device spike:** measure the harness on iPad Safari, then inside ChatGPT next to tldraw. Zoomed-out pan (criterion 4b) has a fix that passes on desktop; re-measure on iPad.
 3. **Engine plugin:** `EngineEditorPort` + its own page store (planned first), served as a separate ChatGPT plugin. The tldraw plugin keeps working unchanged; the user tests each plugin separately.
 4. **Parity on iPad, then switch.** No converter: the user decided old tldraw notes need no compatibility. Old data is left in place (not deleted) unless the user explicitly asks. tldraw is removed only after the engine plugin is accepted.
 
+### Engine storage plan (user decisions October 29, 2026; not built)
+
+- **Separate folder:** `%LOCALAPPDATA%\NOVA-Ink\engine-data` (override `NOVA_INK_ENGINE_DATA_DIR`). The tldraw data folder is never read or written by the engine plugin.
+- **Reuse `NotebookStore`** (`storage.mjs`) for its proven guarantees: atomic writes, revision conflicts, one editing lease per canvas, 10 backups, manifest recovery, quarantine instead of deletion. Its only tldraw-specific part is the snapshot shape check; it becomes a constructor option with today's check as the default, so the tldraw plugin behaves exactly as before (its tests must stay green).
+- **One store canvas = one page.** A page snapshot is `{ document: <nova-ink page, including paper>, session: { camera } }`, validated with `parsePage` (refuse rather than guess). Per-page saves keep each write small and leases per page; the 12 MiB limit applies per page. Camera-only saves do not push out backups (existing behaviour, since only `document` is compared).
+- **Notebook index** (`notebooks.json` next to the page store, atomic writes plus a backup copy, its own revision for conflict protection): notebooks with names and ordered page ids, and the last opened notebook/page. Removing a page moves it to a recoverable trash list; nothing is deleted. Pages found in the store but in no notebook appear in a "Recovered pages" notebook instead of vanishing.
+- **New page** copies the previous page's paper; each page then keeps its own.
+- **Saved** only after the server confirms the write; on failure **Not synced** with the local copy kept (unchanged product rule).
+- **Server:** a separate engine MCP server process outside `engine/` (the engine stays free of server code), bound to 127.0.0.1. Tools mirror today's (list, open with lease, save with expected revision, create, rename) plus page add/rename/reorder/remove. Session tests run it in memory with temporary directories.
+- **Backups:** `npm run backup`/`restore` cover the engine folder too.
+- **Later:** images and PDFs as content-addressed files referenced from pages; delta saves only if full-page saves prove slow over the tunnel (3,000 strokes ≈ 2.2 MB).
+- **Build order:** (1) pluggable snapshot check in `NotebookStore`; (2) engine page snapshot validator; (3) notebook index with tests; (4) engine MCP server and session tests; (5) connect it to ChatGPT as a second plugin after the user confirms the plugin/tunnel change; (6) backup/restore coverage.
+
 ## 9. Known gaps (not built)
 
-Read-only mode and `EditorPort` adapter; viewport PNG export and shape context for Ask NOVA; gesture-time bitmap cache / tiles / level of detail; spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); partial (segment) eraser; lasso selection and transforms; colors/width UI; pages and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; running inside ChatGPT.
+Read-only mode and `EditorPort` adapter; viewport PNG export and shape context for Ask NOVA; tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms; images and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; running inside ChatGPT.
 
 ## 10. Open decisions for the product owner
 
