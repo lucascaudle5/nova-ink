@@ -29,6 +29,7 @@ const saveId = z.string().min(1).max(64)
 const name = z.string().min(1).max(80)
 const paper = z.object({ color: z.string().max(16), pattern: z.string().max(16) })
 const camera = z.object({ x: z.number(), y: z.number(), z: z.number() })
+const color = z.string().regex(/^#[0-9a-f]{6}$/)
 const stroke = z.record(z.string(), z.unknown())
 
 function result(data: Data) {
@@ -97,7 +98,12 @@ export function createEngineServer(ctx: ServerContext): McpServer {
 
   tool('nb_list', 'List notebooks and pages', z.object({}), 'mcp:read', () => library().list())
 
-  tool('nb_create_notebook', 'Create a notebook after an explicit user action', z.object({ name }), 'mcp:write', a => library().createNotebook({ name: a.name }))
+  tool('nb_create_notebook', 'Create a notebook after an explicit user action', z.object({ name, folderId: uuid.nullable().optional(), color: color.nullable().optional() }), 'mcp:write', a => library().createNotebook(a))
+  tool('nb_update_notebook', 'Move a notebook to a folder (null = top level) or change its cover color', z.object({ notebookId: uuid, folderId: uuid.nullable().optional(), color: color.nullable().optional() }), 'mcp:write', a => library().updateNotebook(a))
+  tool('nb_create_folder', 'Create a folder for notebooks', z.object({ name }), 'mcp:write', a => library().createFolder(a))
+  tool('nb_rename_folder', 'Rename a folder', z.object({ folderId: uuid, name }), 'mcp:write', a => library().renameFolder(a))
+  tool('nb_remove_folder', 'Move a folder to the trash; its notebooks move to the top level', z.object({ folderId: uuid }), 'mcp:write', a => library().removeFolder(a))
+  tool('nb_restore_folder', 'Restore a folder from the trash', z.object({ folderId: uuid }), 'mcp:write', a => library().restoreFolder(a))
   tool('nb_rename_notebook', 'Rename a notebook', z.object({ notebookId: uuid, name }), 'mcp:write', a => library().renameNotebook(a))
   tool('nb_remove_notebook', 'Move a notebook to the trash (restorable)', z.object({ notebookId: uuid }), 'mcp:write', a => library().removeNotebook(a))
   tool('nb_restore_notebook', 'Restore a notebook from the trash', z.object({ notebookId: uuid }), 'mcp:write', a => library().restoreNotebook(a))

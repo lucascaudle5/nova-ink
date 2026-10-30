@@ -10,7 +10,10 @@
     <main id="surface"></main>
 
     <nav class="pagesbar floating" aria-label="Notebook">
-      <button id="pages-button" class="pages-button" title="Notebooks and pages" aria-label="Notebooks and pages" aria-expanded="false">
+      <button id="library-button" title="Library" aria-label="Library">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
+      </button>
+      <button id="pages-button" class="pages-button" title="Pages" aria-label="Pages" aria-expanded="false">
         <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /></svg>
         <span id="page-title" class="page-title">NOVA Ink</span>
       </button>
@@ -65,7 +68,16 @@
       </button>
     </nav>
 
-    <aside id="pages" class="pages panel" hidden aria-label="Notebooks and pages"></aside>
+    <section id="library" class="library" hidden aria-label="Library">
+      <header class="library-bar">
+        <span id="library-title" class="library-title"></span>
+        <span id="library-actions" class="library-actions"></span>
+      </header>
+      <div id="library-grid" class="library-grid"></div>
+      <div id="library-sheet" class="sheet" hidden role="dialog" aria-modal="true"></div>
+    </section>
+
+    <aside id="pages" class="pages panel" hidden aria-label="Pages"></aside>
     <div id="menu" class="menu panel" hidden></div>
 
     <footer class="status" aria-live="polite">

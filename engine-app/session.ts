@@ -29,11 +29,14 @@ export type Status = 'loading' | 'saved' | 'unsaved' | 'saving' | 'notSynced' | 
 export type Conflict = 'revision' | 'lease' | 'damaged' | 'gone' | null
 
 export interface PageInfo { id: string; notebookId: string; title: string; revision: number; deletedAt: string | null }
-export interface NotebookInfo { id: string; name: string; deletedAt: string | null; pages: PageInfo[] }
+/** `folderId` and `color` are null for notebooks without them (and from servers older than folders). */
+export interface NotebookInfo { id: string; name: string; folderId?: string | null; color?: string | null; editedAt?: string; deletedAt: string | null; pages: PageInfo[] }
+export interface FolderInfo { id: string; name: string; deletedAt: string | null }
 
 export interface SessionState {
   status: Status
   message: string
+  folders: FolderInfo[]
   notebooks: NotebookInfo[]
   notebookId: string | null
   pageId: string | null
@@ -73,7 +76,7 @@ export class NotebookSession {
   private readonly retryDelaysMs: number[]
 
   private state: SessionState = {
-    status: 'loading', message: 'Connecting to NOVA Ink…', notebooks: [], notebookId: null, pageId: null,
+    status: 'loading', message: 'Connecting to NOVA Ink…', folders: [], notebooks: [], notebookId: null, pageId: null,
     revision: 0, editable: false, conflict: null, busy: false, lastSavedAt: null,
   }
   private listeners = new Set<() => void>()
@@ -156,7 +159,7 @@ export class NotebookSession {
       this.status('notSynced', list.code === 'NETWORK' ? `Can't reach NOVA Ink (${list.message}). Nothing on this device is lost; try again.` : `${list.message ?? 'Could not load notebooks.'}`)
       return null
     }
-    this.set({ notebooks: list.notebooks })
+    this.set({ notebooks: list.notebooks, folders: list.folders ?? [] })
     return list
   }
 
@@ -200,10 +203,10 @@ export class NotebookSession {
     })
   }
 
-  /** Opens the notebook's first page; a notebook without pages shows an empty, locked page. */
-  async openNotebook(notebookId: string): Promise<boolean> {
+  /** Opens `pageId` if it is a live page of the notebook, else its first page; a notebook without pages shows an empty, locked page. */
+  async openNotebook(notebookId: string, pageId?: string | null): Promise<boolean> {
     const book = this.state.notebooks.find(n => n.id === notebookId)
-    const first = book?.pages.find(p => !p.deletedAt)
+    const first = book?.pages.find(p => p.id === pageId && !p.deletedAt) ?? book?.pages.find(p => !p.deletedAt)
     if (first) return this.openPage(first.id)
     return this.queue(async () => {
       if (this.state.pageId) {
@@ -464,10 +467,16 @@ export class NotebookSession {
     const res = await this.organise('nb_add_page', { notebookId, afterPageId: this.state.pageId })
     if (res.ok) await this.openPage(res.pageId)
   }
-  async createNotebook(name: string): Promise<void> {
-    const res = await this.organise('nb_create_notebook', { name })
-    if (res.ok) await this.openPage(res.pageId)
+  async createNotebook(name: string, cover: { folderId?: string | null; color?: string | null } = {}): Promise<boolean> {
+    const res = await this.organise('nb_create_notebook', { name, ...cover })
+    return res.ok && await this.openPage(res.pageId)
   }
+  /** Moves a notebook into a folder (null = top level) and/or sets its cover color; omitted fields stay. */
+  updateNotebook(notebookId: string, change: { folderId?: string | null; color?: string | null }) { return this.organise('nb_update_notebook', { notebookId, ...change }) }
+  createFolder(name: string) { return this.organise('nb_create_folder', { name }) }
+  renameFolder(folderId: string, name: string) { return this.organise('nb_rename_folder', { folderId, name }) }
+  removeFolder(folderId: string) { return this.organise('nb_remove_folder', { folderId }) }
+  restoreFolder(folderId: string) { return this.organise('nb_restore_folder', { folderId }) }
   renamePage(pageId: string, title: string) { return this.organise('nb_rename_page', { pageId, title }) }
   renameNotebook(notebookId: string, name: string) { return this.organise('nb_rename_notebook', { notebookId, name }) }
   movePage(pageId: string, afterPageId: string | null) { return this.organise('nb_move_page', { pageId, afterPageId }) }

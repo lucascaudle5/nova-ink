@@ -12,12 +12,15 @@ type MockPage = {
   rows: Map<string, { key: string; stroke: unknown }>; paper: Paper; camera: Camera | null
   lease: Lease | null; last: { saveId: string; clientId: string; revision: number } | null
 }
-type MockNotebook = { id: string; name: string; deletedAt: string | null }
+type MockNotebook = { id: string; name: string; folderId: string | null; color: string | null; editedAt: string; deletedAt: string | null }
+type MockFolder = { id: string; name: string; deletedAt: string | null }
+const COLOR = /^#[0-9a-f]{6}$/
 
 const LEASE_MS = 45_000
 const DEFAULT_PAPER: Paper = { color: 'white', pattern: 'blank' }
 
 export class MockServer {
+  folders: MockFolder[] = []
   notebooks: MockNotebook[] = []
   pages = new Map<string, MockPage>()
   last: { notebookId: string; pageId: string } | null = null
@@ -30,9 +33,13 @@ export class MockServer {
 
   constructor(options: { clock?: () => number } = {}) {
     if (options.clock) Object.defineProperty(this, 'now', { get: options.clock })
-    const notebookId = this.id()
-    this.notebooks.push({ id: notebookId, name: 'My Notebook', deletedAt: null })
-    this.addPage(notebookId, 'Page 1')
+    this.addPage(this.addNotebook('My Notebook'), 'Page 1')
+  }
+
+  addNotebook(name: string, folderId: string | null = null, color: string | null = null): string {
+    const id = this.id()
+    this.notebooks.push({ id, name, folderId, color, editedAt: new Date().toISOString(), deletedAt: null })
+    return id
   }
 
   id() { return `00000000-0000-4000-8000-${String(++this.n).padStart(12, '0')}` }
@@ -73,18 +80,42 @@ export class MockServer {
     const ok = (extra: Record<string, unknown> = {}): Data => ({ ok: true, ...extra })
     const missing = (): Data => ({ ok: false, code: 'NOT_FOUND', message: 'That notebook or page was not found.' })
     const book = this.notebooks.find(n => n.id === a.notebookId)
+    const folder = this.folders.find(f => f.id === a.folderId)
+    const badCover = (): Data | null =>
+      a.color != null && !COLOR.test(a.color) ? { ok: false, code: 'INVALID_COLOR', message: 'Choose a cover color.' }
+        : a.folderId != null && (!folder || folder.deletedAt) ? missing() : null
     switch (name) {
       case 'nb_list': {
         const notebooks = this.notebooks.map(n => ({ ...n, pages: [...this.pages].filter(([, p]) => p.notebookId === n.id).map(([id, p]) => this.meta(id, p)) }))
         const live = notebooks.find(n => n.id === this.last?.notebookId && !n.deletedAt) ?? notebooks.find(n => !n.deletedAt)
         const page = live?.pages.find(p => p.id === this.last?.pageId && !p.deletedAt) ?? live?.pages.find(p => !p.deletedAt)
-        return ok({ notebooks, last: { notebookId: live?.id ?? null, pageId: page?.id ?? null } })
+        return ok({ folders: this.folders, notebooks, last: { notebookId: live?.id ?? null, pageId: page?.id ?? null } })
       }
       case 'nb_create_notebook': {
-        const id = this.id()
-        this.notebooks.push({ id, name: a.name, deletedAt: null })
+        const bad = badCover()
+        if (bad) return bad
+        const id = this.addNotebook(a.name, a.folderId ?? null, a.color ?? null)
         return ok({ notebookId: id, pageId: this.addPage(id, 'Page 1') })
       }
+      case 'nb_update_notebook': {
+        if (!book) return missing()
+        const bad = badCover()
+        if (bad) return bad
+        if ('folderId' in a) book.folderId = a.folderId
+        if ('color' in a) book.color = a.color
+        return ok()
+      }
+      case 'nb_create_folder': {
+        const id = this.id()
+        this.folders.push({ id, name: a.name, deletedAt: null })
+        return ok({ folderId: id })
+      }
+      case 'nb_rename_folder': if (!folder) return missing(); folder.name = a.name; return ok()
+      case 'nb_remove_folder':
+        if (!folder) return missing()
+        for (const n of this.notebooks) if (n.folderId === folder.id) n.folderId = null
+        folder.deletedAt = new Date().toISOString(); return ok()
+      case 'nb_restore_folder': if (!folder) return missing(); folder.deletedAt = null; return ok()
       case 'nb_rename_notebook': if (!book) return missing(); book.name = a.name; return ok()
       case 'nb_remove_notebook':
         if (!book) return missing()
@@ -134,6 +165,8 @@ export class MockServer {
         if (a.paper) p.paper = a.paper
         if (a.camera) p.camera = a.camera
         p.revision++
+        const owner = this.notebooks.find(n => n.id === p.notebookId)
+        if (owner) owner.editedAt = new Date().toISOString()
         p.last = { saveId: a.saveId, clientId: a.clientId, revision: p.revision }
         this.lease(p, a.clientId)
         return ok({ revision: p.revision, savedAt: new Date().toISOString(), strokeCount: p.rows.size })

@@ -169,3 +169,27 @@ test('camera-only changes are saved without touching strokes', async () => {
   assert.equal(session.getState().status, 'saved')
   done()
 })
+
+test('library: folders and cover colors; a notebook reopens on the page asked for; unsaved ink is saved before switching', async () => {
+  const { server, session, draw, done } = await rig()
+  const physics = (await session.createFolder('Physics')).folderId
+  assert.ok(await session.createNotebook('Lab 1', { folderId: physics, color: '#1f7a5c' }))
+  let state = session.getState()
+  const lab = state.notebooks.find(n => n.name === 'Lab 1')!
+  assert.deepEqual([state.folders.map(f => f.name), lab.folderId, lab.color, state.notebookId], [['Physics'], physics, '#1f7a5c', lab.id])
+
+  const second = server.addPage(server.notebookId, 'Page 2')
+  await session.refreshList()
+  draw(0)
+  assert.ok(await session.openNotebook(server.notebookId, second))
+  assert.equal(session.getState().pageId, second)
+  assert.equal(server.pages.get(lab.pages[0].id)!.rows.size, 1, 'the ink on Lab 1 was saved before switching')
+
+  assert.equal((await session.updateNotebook(lab.id, { color: 'green' })).code, 'INVALID_COLOR')
+  await session.updateNotebook(server.notebookId, { folderId: physics })
+  await session.removeFolder(physics)
+  state = session.getState()
+  assert.deepEqual(state.notebooks.map(n => n.folderId), [null, null])
+  assert.ok(state.folders[0].deletedAt)
+  done()
+})

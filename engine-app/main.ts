@@ -1,10 +1,10 @@
 import { App, PostMessageTransport } from '@modelcontextprotocol/ext-apps'
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps'
 import { InkSurface } from '../engine/src/dom/surface'
-import { $, el, mountTools } from '../engine/harness/tools'
+import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MockServer } from './mock-server'
 import { NotebookSession } from './session'
-import type { Api, Data, PageEditor, PageInfo, SessionState, Status } from './session'
+import type { Api, Data, FolderInfo, NotebookInfo, PageEditor, PageInfo, SessionState, Status } from './session'
 import '../engine/harness/harness.css'
 import './app.css'
 
@@ -79,6 +79,13 @@ let api: Api
 if (preview) {
   const mock = new MockServer({ clock: () => Date.now() })
   mock.latencyMs = 120
+  if (new URLSearchParams(location.search).has('demo')) {
+    const physics = mock.id(), math = mock.id()
+    mock.folders.push({ id: physics, name: 'Physics', deletedAt: null }, { id: math, name: 'Math 241', deletedAt: null })
+    for (const [name, folderId, color] of [['Dynamics HW', physics, '#b8432f'], ['Lab notebook', physics, '#1f7a5c'], ['Calc III lectures', math, '#6b4fa3'], ['Ideas', null, '#d08a1e']] as const) {
+      mock.addPage(mock.addNotebook(name, folderId, color), 'Page 1')
+    }
+  }
   api = mock.api
   ;(window as unknown as { novaMock: MockServer }).novaMock = mock
 } else {
@@ -211,18 +218,7 @@ function renderPages(state: SessionState) {
   if (pagesPanel.hidden) return
 
   const header = el('header')
-  const select = el('select', { title: 'Notebook', ariaLabel: 'Notebook' })
-  for (const n of state.notebooks.filter(n => !n.deletedAt)) select.append(el('option', { value: n.id, textContent: n.name, selected: n.id === state.notebookId }))
-  select.addEventListener('change', () => void session.openNotebook(select.value))
-  if (renaming === `notebook:${current?.id}` && current) header.append(renameInput(current.name, name => void session.renameNotebook(current.id, name)))
-  else header.append(select)
-  const newBook = el('button', { className: 'text', title: 'New notebook' })
-  newBook.append(icon(ICON_PLUS), document.createTextNode(' Notebook'))
-  newBook.addEventListener('click', () => {
-    const count = state.notebooks.filter(n => !n.deletedAt).length
-    void session.createNotebook(`Notebook ${count + 1}`).then(() => { renaming = `notebook:${session.getState().notebookId}`; render() })
-  })
-  header.append(newBook)
+  header.append(el('span', { className: 'title', textContent: current?.name ?? 'Notebook' }))
 
   const list = el('div', { className: 'list' })
   if (!live.length) list.append(el('div', { className: 'empty', textContent: 'No pages in this notebook.' }))
@@ -242,16 +238,10 @@ function renderPages(state: SessionState) {
   if (showTrash && current) {
     list.append(el('div', { className: 'section', textContent: 'Trash' }))
     const trashedPages = current.pages.filter(p => p.deletedAt)
-    const trashedBooks = state.notebooks.filter(n => n.deletedAt)
-    if (!trashedPages.length && !trashedBooks.length) list.append(el('div', { className: 'empty', textContent: 'The trash is empty.' }))
+    if (!trashedPages.length) list.append(el('div', { className: 'empty', textContent: 'No pages of this notebook are in the trash.' }))
     for (const p of trashedPages) {
       const row = el('div', { className: 'row trash' })
       row.append(el('button', { className: 'open', textContent: p.title, disabled: true }), iconButton('Restore page', ICON_RESTORE, () => void session.restorePage(p.id)))
-      list.append(row)
-    }
-    for (const n of trashedBooks) {
-      const row = el('div', { className: 'row trash' })
-      row.append(el('button', { className: 'open', textContent: `Notebook: ${n.name}`, disabled: true }), iconButton('Restore notebook', ICON_RESTORE, () => void session.restoreNotebook(n.id)))
       list.append(row)
     }
   }
@@ -261,14 +251,7 @@ function renderPages(state: SessionState) {
   add.append(icon(ICON_PLUS), document.createTextNode(' Page'))
   add.addEventListener('click', () => void session.addPage())
   footer.append(add)
-  if (current) {
-    footer.append(action('Rename notebook', () => { renaming = `notebook:${current.id}`; render() }))
-    const removeBook = confirmButton('Trash notebook', 'Tap again to trash it', () => void session.removeNotebook(current.id).then(res => {
-      if (res.ok) { const next = session.getState().notebooks.find(n => !n.deletedAt); if (next) void session.openNotebook(next.id) }
-    }))
-    footer.append(removeBook)
-  }
-  footer.append(action(showTrash ? 'Hide trash' : 'Show trash', () => { showTrash = !showTrash; render() }))
+  footer.append(action(showTrash ? 'Hide trash' : 'Trashed pages', () => { showTrash = !showTrash; render() }))
   for (const b of footer.querySelectorAll('button')) b.classList.add('text')
   pagesPanel.replaceChildren(header, list, footer)
 }
@@ -291,6 +274,214 @@ function step(direction: 1 | -1) {
 }
 $('prev-page').addEventListener('click', () => step(-1))
 $('next-page').addEventListener('click', () => step(1))
+
+// ---- Library: notebook covers and folders ----
+
+const library = $<HTMLElement>('library')
+const sheet = $<HTMLDivElement>('library-sheet')
+const COVERS = ['#2f5d8a', '#1f7a5c', '#b8432f', '#d08a1e', '#6b4fa3', '#2b8a9e', '#c2477a', '#5f6b7a']
+const DEFAULT_COVER = COVERS[0]
+const LAST_PAGES_KEY = 'nova-ink-engine:last-pages'
+const ICON_FOLDER = '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+const ICON_MORE = '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'
+const ICON_BACK = '<path d="m15 18-6-6 6-6"/>'
+
+/** null = top level. */
+let folderView: string | null = null
+let libraryTrash = false
+
+/** The page last open in each notebook on this device, so a notebook reopens where you left it. */
+const lastPages: Record<string, string> = (() => { try { return JSON.parse(readStored(LAST_PAGES_KEY) ?? '{}') ?? {} } catch { return {} } })()
+function rememberPage(state: SessionState) {
+  if (!state.notebookId || !state.pageId || lastPages[state.notebookId] === state.pageId) return
+  lastPages[state.notebookId] = state.pageId
+  writeStored(LAST_PAGES_KEY, JSON.stringify(lastPages))
+}
+
+function editedLabel(iso: string | undefined) {
+  if (!iso) return ''
+  const d = new Date(iso), now = new Date()
+  if (d.toDateString() === now.toDateString()) return `Today, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) })
+}
+
+function showLibrary(open: boolean) {
+  library.hidden = !open
+  document.body.classList.toggle('in-library', open)
+  if (open) { closePanels(); openMenu(false); tools.closePopover(); folderView = null; libraryTrash = false; void session.refreshList() }
+  else closeSheet()
+  render()
+}
+$('library-button').addEventListener('click', () => showLibrary(true))
+
+async function openFromLibrary(notebookId: string) {
+  const state = session.getState()
+  if (notebookId === state.notebookId && (state.pageId || !livePages(state).length)) { showLibrary(false); return }
+  if (await session.openNotebook(notebookId, lastPages[notebookId])) showLibrary(false)
+}
+
+function cover(n: NotebookInfo) {
+  const tile = el('div', { className: `tile notebook${n.id === session.getState().notebookId ? ' current' : ''}` })
+  const open = el('button', { className: 'cover', title: `Open ${n.name}`, ariaLabel: `Open ${n.name}` }, { background: n.color ?? DEFAULT_COVER })
+  open.append(el('span', { className: 'cover-name', textContent: n.name }))
+  open.addEventListener('click', () => void openFromLibrary(n.id))
+  const pages = n.pages.filter(p => !p.deletedAt).length
+  tile.append(open, caption(n.name, `${editedLabel(n.editedAt)}${n.editedAt ? ' · ' : ''}${pages} ${pages === 1 ? 'page' : 'pages'}`, () => notebookSheet(n)))
+  return tile
+}
+
+function folderTile(f: FolderInfo, count: number) {
+  const tile = el('div', { className: 'tile folder' })
+  const open = el('button', { className: 'cover folder-cover', title: `Open folder ${f.name}`, ariaLabel: `Open folder ${f.name}` })
+  open.append(icon(ICON_FOLDER))
+  open.addEventListener('click', () => { folderView = f.id; render() })
+  tile.append(open, caption(f.name, `${count} ${count === 1 ? 'notebook' : 'notebooks'}`, () => folderSheet(f)))
+  return tile
+}
+
+function caption(name: string, detail: string, more: () => void) {
+  const box = el('div', { className: 'caption' })
+  const text = el('div', { className: 'caption-text' })
+  text.append(el('div', { className: 'caption-name', textContent: name, title: name }), el('div', { className: 'caption-detail', textContent: detail }))
+  box.append(text, iconButton(`Options for ${name}`, ICON_MORE, more))
+  return box
+}
+
+const libraryButton = (label: string, run: () => void, className = '') => action(label, run, `text ${className}`)
+
+function renderLibrary(state: SessionState) {
+  if (library.hidden) return
+  const folders = state.folders.filter(f => !f.deletedAt)
+  if (folderView && !folders.some(f => f.id === folderView)) folderView = null
+  const folder = folders.find(f => f.id === folderView)
+  const books = state.notebooks.filter(n => !n.deletedAt)
+
+  const title = $('library-title')
+  if (libraryTrash || folder) {
+    const back = el('button', { className: 'back', title: 'All notebooks', ariaLabel: 'All notebooks' })
+    back.append(icon(ICON_BACK))
+    back.addEventListener('click', () => { libraryTrash = false; folderView = null; render() })
+    title.replaceChildren(back, el('span', { textContent: libraryTrash ? 'Trash' : folder!.name }))
+  } else title.replaceChildren(el('span', { textContent: 'Notebooks' }))
+
+  const actions: HTMLButtonElement[] = []
+  if (!libraryTrash) {
+    if (!folder) actions.push(libraryButton('New folder', () => folderSheet(null)))
+    actions.push(libraryButton('New notebook', () => notebookSheet(null), 'primary'))
+    actions.push(libraryButton('Trash', () => { libraryTrash = true; render() }))
+  }
+  if (state.notebookId && books.some(n => n.id === state.notebookId)) actions.push(libraryButton('Done', () => showLibrary(false)))
+  $('library-actions').replaceChildren(...actions)
+
+  const grid = $('library-grid')
+  const tiles: HTMLElement[] = []
+  if (libraryTrash) {
+    const trashedBooks = state.notebooks.filter(n => n.deletedAt)
+    const trashedFolders = state.folders.filter(f => f.deletedAt)
+    for (const f of trashedFolders) tiles.push(trashRow(`Folder: ${f.name}`, () => void session.restoreFolder(f.id)))
+    for (const n of trashedBooks) tiles.push(trashRow(n.name, () => void session.restoreNotebook(n.id), n.color))
+    if (!tiles.length) tiles.push(el('div', { className: 'library-empty', textContent: 'The trash is empty.' }))
+    tiles.push(el('div', { className: 'library-note', textContent: 'Trashed pages are listed in each notebook\'s Pages panel. Restoring a folder does not move notebooks back into it.' }))
+  } else {
+    if (!folder) for (const f of folders) tiles.push(folderTile(f, books.filter(n => n.folderId === f.id).length))
+    const here = books.filter(n => (n.folderId ?? null) === (folder?.id ?? null) || (!folder && n.folderId && !folders.some(f => f.id === n.folderId)))
+    for (const n of here) tiles.push(cover(n))
+    if (!tiles.length) tiles.push(el('div', { className: 'library-empty', textContent: folder ? 'This folder is empty. Create a notebook here, or move one in from its options.' : 'No notebooks yet.' }))
+  }
+  grid.className = libraryTrash ? 'library-grid list' : 'library-grid'
+  grid.replaceChildren(...tiles)
+}
+
+function trashRow(name: string, restore: () => void, color?: string | null) {
+  const row = el('div', { className: 'trash-row' })
+  row.append(el('span', { className: 'swatch' }, { background: color ?? (name.startsWith('Folder:') ? 'transparent' : DEFAULT_COVER) }), el('span', { className: 'name', textContent: name }), action('Restore', restore, 'text'))
+  return row
+}
+
+// The sheet is built once per opening (not on every state change), so typing in it is never interrupted.
+function closeSheet() { sheet.hidden = true; sheet.replaceChildren() }
+function openSheet(heading: string, body: HTMLElement[], buttons: HTMLButtonElement[]) {
+  const card = el('div', { className: 'sheet-card' })
+  const foot = el('div', { className: 'sheet-buttons' })
+  foot.append(...buttons)
+  card.append(el('h2', { textContent: heading }), ...body, foot)
+  sheet.replaceChildren(card)
+  sheet.hidden = false
+  const input = card.querySelector('input')
+  if (input) setTimeout(() => { input.focus(); input.select() })
+}
+sheet.addEventListener('pointerdown', e => { if (e.target === sheet) closeSheet() })
+
+function nameField(value: string, placeholder: string, submit: () => void) {
+  const input = el('input', { className: 'sheet-name', value, placeholder, maxLength: 80 })
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') closeSheet() })
+  return input
+}
+
+function swatches(selected: string, pick: (color: string) => void) {
+  const row = el('div', { className: 'swatches', role: 'radiogroup', ariaLabel: 'Cover color' })
+  for (const c of COVERS) {
+    const b = el('button', { className: `swatch${c === selected ? ' selected' : ''}`, title: c, ariaLabel: `Cover color ${c}`, role: 'radio', ariaChecked: String(c === selected) }, { background: c })
+    b.addEventListener('click', () => {
+      for (const other of row.children) { other.classList.toggle('selected', other === b); other.setAttribute('aria-checked', String(other === b)) }
+      pick(c)
+    })
+    row.append(b)
+  }
+  return row
+}
+
+/** null = a new notebook (created in the folder being viewed). */
+function notebookSheet(n: NotebookInfo | null) {
+  const state = session.getState()
+  let color = n?.color ?? (n ? DEFAULT_COVER : COVERS[state.notebooks.length % COVERS.length])
+  const folders = state.folders.filter(f => !f.deletedAt)
+  const move = el('select', { className: 'sheet-select', ariaLabel: 'Folder' })
+  move.append(el('option', { value: '', textContent: 'No folder' }))
+  const inFolder = n ? n.folderId ?? null : folderView
+  for (const f of folders) move.append(el('option', { value: f.id, textContent: f.name, selected: f.id === inFolder }))
+  const label = (text: string) => el('div', { className: 'sheet-label', textContent: text })
+
+  const submit = async () => {
+    const name = input.value.trim()
+    if (!name) { input.focus(); return }
+    const folderId = move.value || null
+    closeSheet()
+    if (!n) { if (await session.createNotebook(name, { folderId, color })) showLibrary(false); return }
+    if (name !== n.name) await session.renameNotebook(n.id, name)
+    if (folderId !== (n.folderId ?? null) || color !== (n.color ?? DEFAULT_COVER)) await session.updateNotebook(n.id, { folderId, color })
+  }
+  const input = nameField(n?.name ?? `Notebook ${state.notebooks.filter(b => !b.deletedAt).length + 1}`, 'Notebook name', () => void submit())
+  const body = [label('Name'), input, label('Cover'), swatches(color, c => { color = c }), label('Folder'), move]
+  const buttons = [action('Cancel', closeSheet, 'text'), action(n ? 'Save' : 'Create', () => void submit(), 'text primary')]
+  if (n) buttons.unshift(confirmButton('Move to trash', 'Tap again to trash it', () => { closeSheet(); void trashNotebook(n.id) }, 'text danger'))
+  openSheet(n ? 'Notebook' : 'New notebook', body, buttons)
+}
+
+async function trashNotebook(notebookId: string) {
+  const state = session.getState()
+  const current = state.notebookId === notebookId
+  if (current) await session.save()
+  const res = await session.removeNotebook(notebookId)
+  if (!res.ok || !current) return
+  const next = session.getState().notebooks.find(b => !b.deletedAt)
+  if (next) void session.openNotebook(next.id, lastPages[next.id])
+}
+
+function folderSheet(f: FolderInfo | null) {
+  const submit = async () => {
+    const name = input.value.trim()
+    if (!name) { input.focus(); return }
+    closeSheet()
+    if (!f) await session.createFolder(name)
+    else if (name !== f.name) await session.renameFolder(f.id, name)
+  }
+  const input = nameField(f?.name ?? 'New folder', 'Folder name', () => void submit())
+  const buttons = [action('Cancel', closeSheet, 'text'), action(f ? 'Save' : 'Create', () => void submit(), 'text primary')]
+  if (f) buttons.unshift(confirmButton('Delete folder', 'Tap again: its notebooks stay', () => { closeSheet(); void session.removeFolder(f.id) }, 'text danger'))
+  const note = el('div', { className: 'sheet-note', textContent: f ? 'Deleting a folder moves it to the trash; its notebooks move to the top level and are not deleted.' : 'Folders hold notebooks. Move a notebook in from its options.' })
+  openSheet(f ? 'Folder' : 'New folder', [input, note], buttons)
+}
 
 // ---- More menu ----
 
@@ -348,7 +539,7 @@ document.addEventListener('pointerdown', e => {
   if (!menu.hidden && !menu.contains(target) && !menuButton.contains(target)) openMenu(false)
   if (!pagesPanel.hidden && !pagesPanel.contains(target) && !pagesButton.contains(target)) { closePanels(); render() }
 })
-window.addEventListener('keydown', e => { if (e.key === 'Escape') { openMenu(false); closePanels() } })
+window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else { openMenu(false); closePanels() } } })
 
 // ---- Lifecycle ----
 
@@ -357,6 +548,8 @@ function render() {
   const state = session.getState()
   renderStatus(state)
   renderPages(state)
+  renderLibrary(state)
+  rememberPage(state)
   if (rendered?.revision !== state.revision || rendered?.editable !== state.editable) renderMenu()
   rendered = state
 }
@@ -380,5 +573,6 @@ async function boot() {
     applyHost(app.getHostContext())
   }
   await session.start()
+  if (preview && new URLSearchParams(location.search).has('library')) showLibrary(true)
 }
 void boot()

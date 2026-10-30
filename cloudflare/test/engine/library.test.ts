@@ -1,4 +1,5 @@
 /** NotebookLibraryDO: notebooks, ordered pages, trash (nothing destroyed), last opened page. */
+import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { E } from './helpers'
 
@@ -78,5 +79,49 @@ describe('notebooks and pages', () => {
     expect(await lib.renameNotebook({ notebookId: notebooks[0].id, name: '   ' })).toMatchObject({ ok: false, code: 'INVALID_NAME' })
     expect(await lib.getPage(crypto.randomUUID())).toBeNull()
     expect(await lib.addPage({ notebookId: crypto.randomUUID() })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+  })
+
+  it('a library saved before folders existed gains the new columns and keeps its notebooks unchanged', async () => {
+    const lib = newLibrary()
+    const before = await lib.list()
+    await runInDurableObject(lib, async (instance: any, state: DurableObjectState) => {
+      state.storage.sql.exec('ALTER TABLE notebooks DROP COLUMN folder_id')
+      state.storage.sql.exec('ALTER TABLE notebooks DROP COLUMN color')
+      state.storage.sql.exec('DROP TABLE folders')
+      instance.ensureSchema()
+    })
+    const after = await lib.list()
+    expect(after.folders).toEqual([])
+    expect(after.notebooks).toEqual(before.notebooks)
+    expect(after.last).toEqual(before.last)
+  })
+
+  it('folders hold notebooks; covers have a color; removing a folder keeps its notebooks at the top level', async () => {
+    const lib = newLibrary()
+    const { notebooks } = await lib.list()
+    const mine = notebooks[0].id
+    expect(notebooks[0]).toMatchObject({ folderId: null, color: null })
+    const dynamics = (await lib.createFolder({ name: 'Dynamics' })).folderId
+    const hw = await lib.createNotebook({ name: 'HW', folderId: dynamics, color: '#1f6feb' })
+    expect(hw).toMatchObject({ ok: true })
+    expect(await lib.updateNotebook({ notebookId: mine, folderId: dynamics })).toMatchObject({ ok: true })
+    expect(await lib.updateNotebook({ notebookId: mine, color: '#d1242f' })).toMatchObject({ ok: true })
+    let list = await lib.list()
+    expect(list.folders.map((f: any) => f.name)).toEqual(['Dynamics'])
+    expect(list.notebooks.map((n: any) => [n.name, n.folderId, n.color])).toEqual([['My Notebook', dynamics, '#d1242f'], ['HW', dynamics, '#1f6feb']])
+    expect(list.notebooks[1].editedAt >= list.notebooks[1].createdAt).toBe(true)
+
+    expect(await lib.updateNotebook({ notebookId: mine, color: 'red' })).toMatchObject({ ok: false, code: 'INVALID_COLOR' })
+    expect(await lib.updateNotebook({ notebookId: mine, folderId: crypto.randomUUID() })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    expect(await lib.renameFolder({ folderId: dynamics, name: 'Dynamics (AE 312)' })).toMatchObject({ ok: true })
+
+    expect(await lib.removeFolder({ folderId: dynamics })).toMatchObject({ ok: true })
+    list = await lib.list()
+    expect(list.folders[0]).toMatchObject({ name: 'Dynamics (AE 312)' })
+    expect(list.folders[0].deletedAt).toBeTruthy()
+    expect(list.notebooks.map((n: any) => [n.folderId, n.deletedAt])).toEqual([[null, null], [null, null]])
+    expect(await lib.createNotebook({ name: 'X', folderId: dynamics })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    await lib.restoreFolder({ folderId: dynamics })
+    expect((await lib.list()).folders[0].deletedAt).toBeNull()
   })
 })
