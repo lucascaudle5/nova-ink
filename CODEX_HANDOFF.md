@@ -171,6 +171,11 @@ Cloudflare test deployment taken down (October 29, 2026, ~8:55 PM, user's decisi
 
 Engine notebook built locally (October 29, 2026, evening; user: "Yes, start building it"): build steps 1–5 of the Cloudflare plan are done and committed on engine/spike; nothing is deployed. Worker `cloudflare/src/engine/` with tests `cloudflare/test/engine/`; ChatGPT notebook app `engine-app/` (root scripts `build:engine-app`, `test:engine-app`, `dev:engine-app`). What was verified, and where, is listed in ENGINE_ARCHITECTURE.md "As built". Verified by automated tests and a desktop Chromium preview only; not inside ChatGPT, not on the iPad, not on real Cloudflare.
 
+Engine deployment (build step 6; user: "Yes, deploy now", October 29, 2026, ~9:40 PM):
+- Created KV namespace `OAUTH_KV_ENGINE` (id in `cloudflare/wrangler.engine.jsonc`) and deployed Worker `nova-ink-engine` at https://nova-ink-engine.ai-nova-personal.workers.dev (version 6f0545a5). Verified with curl right after: `/health` = `{"ok":true,"app":"nova-ink-engine","configured":false}`, `/mcp` and `/authorize` = 503 (fails closed without secrets).
+- Created the Access for SaaS (OIDC) app "NOVA Ink engine" in the dashboard (team `nova-dev`): scopes openid/email/profile, redirect `https://nova-ink-engine.ai-nova-personal.workers.dev/callback`, PKCE on, policy "NOVA Owner", login method One-time PIN only.
+- Next: the user sets the six secrets with `npx wrangler secret put <NAME> -c wrangler.engine.jsonc`, then the ChatGPT connector, then the checks (sign-in, refresh after 1 h and next day, CPU, iPad).
+
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
 2. (Decided above: engine storage plan.)

@@ -14,8 +14,8 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PageDO", "NotebookLibraryDO"] }
   ],
-  // OAUTH_KV: created at deploy time with `npx wrangler kv namespace create OAUTH_KV_ENGINE`; its id goes here (not a secret).
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
-  // Not a secret. Empty until the first deploy tells us the workers.dev URL; while empty the Worker fails closed.
-  "vars": { "PUBLIC_ORIGIN": "" }
+  // OAUTH_KV: namespace "OAUTH_KV_ENGINE", created Oct 29, 2026 (an id is not a secret).
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "50f199597cee47f181c7dcd2eed908d5" }],
+  // Not a secret. The Worker fails closed while this or any secret is missing.
+  "vars": { "PUBLIC_ORIGIN": "https://nova-ink-engine.ai-nova-personal.workers.dev" }
 }
