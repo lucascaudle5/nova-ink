@@ -7,6 +7,7 @@ Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw a
 - README.md for scripts, storage, evidence, and limitations.
 - CODEX_HANDOFF.md for product decisions and status.
 - server.ts, main.ts, storage.mjs, src/main.tsx, src/context.ts, and tests/.
+- For drawing-engine work: engine/README.md and engine/docs/ENGINE_ARCHITECTURE.md (branch engine/spike).
 
 ## Engineering agreements
 - Work in the existing source directory. Preserve local configuration, tunnel connectivity, and saved notebook data.
@@ -20,6 +21,7 @@ Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw a
 - Do not use undocumented host metadata to force an iPad side pane.
 - The user initiates every AI hint. Chat hints do not mutate the canvas; AI annotations need separate explicit selection and attribution.
 - Distinguish independent student work from AI-assisted edits. Separate user reports, verified behavior, plans, and assumptions.
+- engine/ stays independent: it must not import tldraw, React, MCP, storage, server or cloudflare/ code, and never reads real notebook data. Run `npm test` and `npm run build` in engine/ after engine changes.
 
 ## Repository and workflow
 - The code is in a private GitHub repo, https://github.com/lucascaudle5/nova-ink, shared between a work machine (Cursor) and a personal machine (Codex).

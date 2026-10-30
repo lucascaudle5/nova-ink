@@ -3,6 +3,7 @@
 **Snapshot:** October 29, 2026  
 **Packaged reference:** v0.2.1, user-tested on iPad
 **Current local working copy:** v0.2.3 (branch v0.2.3-reliability); not repackaged or published; iPad acceptance is pending but is not a development gate; the user tests in occasional batches (IPAD_ACCEPTANCE.md)
+**Engine spike:** branch engine/spike (Windows worktree `Documents\GitHub\nova-ink-engine`), package `engine/`; experimental, not wired into the app (see "Engine spike status" below)
 
 ## Mission
 A ChatGPT-integrated engineering notebook for actual coursework. Preserve productive independent problem-solving while allowing student-initiated contextual tutoring.
@@ -39,6 +40,7 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 - src/main.tsx: React/tldraw view over CanvasSession, status banners, backup panel, viewport-clipped Ask NOVA, top toolbar.
 - src/context.ts: geometry and context selection. src/styles.css: notebook and backup panel.
 - scripts/build-host-test.mjs: development-mode evaluation build.
+- engine/ (branch engine/spike only): NOVA-owned engine spike, self-contained package with its own tests and browser harness; imports nothing from the app, tldraw, MCP, storage or cloudflare/. See engine/README.md and engine/docs/ENGINE_ARCHITECTURE.md.
 
 ## Accepted product decisions
 1. Native ChatGPT on iPad, Apple Pencil first. Desktop is mainly for imports, organization, and development.
@@ -64,7 +66,7 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 - Secrets, private tunnel identity, and actual notebook data stay outside Git.
 
 ## Repository and workflow
-- The code is in a private GitHub repo, https://github.com/lucascaudle5/nova-ink, shared between a work machine (Cursor) and a personal machine (Codex). Active branch: v0.2.3-reliability.
+- The code is in a private GitHub repo, https://github.com/lucascaudle5/nova-ink, shared between a work machine (Cursor) and a personal machine (Codex). Active branches: v0.2.3-reliability (working app, reliability reference) and engine/spike (engine work; branched from v0.2.3-reliability at a5fb0c5; this handoff section is only on engine/spike until merged).
 - Pushing to this private remote (origin) is authorized. Making it public, or pushing anywhere else, still requires explicit permission. Nothing is packaged or published.
 - Workflow: pull before starting, commit and push before stopping.
 - The package folder's Git repository uses the user's personal author identity; the v0.2.1 source baseline was the first commit. The NOVA ARCHAELOGY chat workspace remains separate from the code package.
@@ -78,6 +80,7 @@ A ChatGPT-integrated engineering notebook for actual coursework. Preserve produc
 2. Next development priority, proceeding without waiting for iPad acceptance and ahead of v0.3 notebooks: PDF page import. PDF pages become separate movable pages with source provenance (document, page number), and page-associated annotations travel with their pages. Provide lock and detach controls. Plan it first; storage changes stay backward compatible.
 3. v0.3 (also proceeds without waiting for iPad acceptance; incremental, backward compatible): notebooks grouping canvases, rename, soft-delete trash, metadata search, explicit schema versioning with opt-in migration.
 4. Do not publish or redeploy without explicit authorization.
+5. Engine spike (branch engine/spike): next milestone and open decisions are under "Engine spike status" below. It does not block items 1–3.
 
 ## Long-term roadmap (accepted October 29, 2026)
 The user is an aerospace engineering student (current courses: Dynamics, Mechanics of Materials) and intends to use and personally extend NOVA Ink for years. Every item below is accepted; the order is a recommendation, not a commitment. Plan each item before building it, keep storage backward compatible, and follow the accepted product decisions above (student-initiated help, no unsolicited hints, AI marks distinguished from student work).
@@ -96,6 +99,35 @@ The user is an aerospace engineering student (current courses: Dynamics, Mechani
 - Start with a bare-bones engine spike tested on the iPad inside ChatGPT against tldraw (Pencil latency, pressure, palm rejection, pan/zoom at 3,000 strokes). Pen feel needs frequent iPad testing; this is the one area where batch-only iPad testing does not fit.
 - The engine owns a documented NOVA stroke/page format. Plan a one-time, non-destructive converter from existing tldraw snapshots. Ask NOVA's viewport image and shape context must be reimplemented on the new engine.
 - Keep engineering tools, tutoring, and the learning record independent of the drawing engine.
+
+### Engine spike status (October 29, 2026, evening)
+Verified before starting: no engine code existed on any branch; cloudflare/ is a storage/hosting experiment (tldraw records in Durable Objects), not an engine experiment; session.ts is already engine-agnostic through EditorPort; tldraw coupling is limited to src/main.tsx, src/snapshot.ts and the storage envelope check (`document.store` / `document.schema` / `session` in storage.mjs and CanvasDO).
+
+Built on engine/spike (details and reasoning in engine/docs/ENGINE_ARCHITECTURE.md):
+- DOM-free core: immutable strokes storing raw coalesced samples (x, y, pressure, ms); variable-width outline; camera with drift-free pinch; ordered document with viewport query; undo/redo with grouped erase that restores z-order; whole-stroke eraser; input rules (Pencil and mouse ink, fingers only navigate, palm rejection).
+- Versioned `nova-ink` page format v1 (delta varint + base64) that refuses non-NOVA, newer or damaged data. Not used for any notebook.
+- Two-layer Canvas 2D renderer (cached paths; live stroke on its own layer; commit draws one stroke).
+- Browser harness (`cd engine; npm run dev` → http://localhost:5180): pen, eraser, undo/redo, +3,000 generated strokes, pan benchmark, Results export (JSON with metrics and device capabilities), scratch draft in localStorage.
+
+Verification, October 29, 2026, this Windows PC:
+- engine: `npm test` 36/36, `tsc` clean, `npm run build` OK, `npm run bench` (Node): 3,000 strokes = 2.17 MiB saved (tldraw fixture 3.9 MiB), 6.2 MiB memory, autosave serialization 3.9 ms (cached), parse 44 ms.
+- Harness in Chromium on desktop (synthetic pointer events, not a Pencil): pen strokes with pressure render; a touch that lands before a pen stroke does not pan; eraser + one-step undo; 3,004-stroke draft restored after reload. Pan benchmark at writing zoom (867 strokes visible): p95 frame interval 7.1 ms at 144 Hz (no drops). Zoomed out with all 3,004 visible: 27.9 ms (~36 fps): **fails the proposed target**.
+- v0.2.3 reference re-run in its own checkout: `npm test` 76/76, `tsc` clean, working tree unchanged.
+- Not verified: anything on iPad, Apple Pencil latency/pressure/coalescing, palm rejection with a real palm, running inside ChatGPT, side-by-side with tldraw.
+
+Recommendation (not yet a product decision): continue the NOVA-owned engine with Canvas 2D; escalate to WebGL only if a gesture-time bitmap cache cannot meet the zoomed-out target on iPad. Develop in engine/ until device numbers meet the criteria in ENGINE_ARCHITECTURE.md section 6, then integrate through an EditorPort adapter, read-only first. tldraw stays the working canvas throughout.
+
+Open decisions (product owner):
+1. Approve or change the acceptance criteria (ENGINE_ARCHITECTURE.md section 6).
+2. Page model: infinite canvas or fixed pages (letter/A4, PDF pages, templates). Affects coordinates, export and the format.
+3. Fingers: navigation only (spike behaviour) or optional finger drawing when no Pencil is used.
+4. Storage of engine pages: wrap them in the existing snapshot envelope (no server change, but tldraw field names with different contents) or add an explicit, backward-compatible page kind/format field (server change). This changes the notebook data format, so it needs explicit approval.
+5. Existing canvases: convert once (non-destructive, new canvases) or keep them on tldraw read-only.
+6. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
+7. iPad testing route: LAN (`npx vite --host`, visible to the local network) for Safari; and a separate dev-only MCP resource/tool for the ChatGPT test, which changes the plugin/tunnel configuration and therefore needs approval.
+8. When to take down the Cloudflare test deployment (still running, see cloudflare/docs/CF_TEST_DEPLOYMENT.md).
+
+Next engine milestone (bounded): (a) gesture-time bitmap cache: during pan/pinch, transform the last rendered base layer and re-render only at gesture end or when the cache runs out, with tests for invalidation on erase/undo/resize; target p95 frame interval ≤ 2 × refresh period at fit-all on this desktop; (b) the user runs the harness on iPad Safari and exports Results for criteria 1–6; (c) record the numbers here.
 
 ### Long-term foundations
 - Data ownership: documented storage formats, PDF export, and tested off-machine backups so notes outlive any app, host, or AI provider.

@@ -1,0 +1,13 @@
+html, body { margin: 0; height: 100%; font: 13px/1.35 system-ui, -apple-system, Segoe UI, sans-serif; background: #eef0f3; color: #1b1f24; }
+body { display: flex; flex-direction: column; overscroll-behavior: none; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); background: #fff; border-bottom: 1px solid #d5d9df; }
+.bar .grow { flex: 1; }
+.tag { color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 2px 6px; }
+button, .file { font: inherit; border: 1px solid #c4c9d0; background: #f7f8fa; border-radius: 6px; padding: 7px 11px; cursor: pointer; min-height: 34px; }
+button.active { background: #1b1f24; color: #fff; border-color: #1b1f24; }
+button:disabled { opacity: 0.45; }
+.file input { display: none; }
+.draft { min-width: 150px; color: #4b5563; }
+.draft.bad { color: #b42318; font-weight: 600; }
+#surface { flex: 1; background: #fff; margin: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+#stats { position: fixed; right: 16px; bottom: 16px; background: rgba(27,31,36,.88); color: #e8eaed; font: 12px/1.4 ui-monospace, Consolas, monospace; padding: 8px 10px; border-radius: 8px; white-space: pre; pointer-events: none; max-width: 46ch; }

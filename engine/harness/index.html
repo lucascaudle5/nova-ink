@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>NOVA Ink engine harness</title>
+    <link rel="stylesheet" href="./harness.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <strong>NOVA Ink engine harness</strong>
+      <span class="tag">experimental · generated / scratch data only</span>
+      <span class="grow"></span>
+      <button data-tool="pen" class="tool active">Pen</button>
+      <button data-tool="eraser" class="tool">Eraser</button>
+      <button id="undo">Undo</button>
+      <button id="redo">Redo</button>
+      <button id="fit">Fit</button>
+      <button id="gen">+3,000 strokes</button>
+      <button id="bench">Benchmark pan</button>
+      <button id="results">Results</button>
+      <button id="export">Export</button>
+      <label class="file">Import<input id="import" type="file" accept="application/json,.json" /></label>
+      <button id="clear">Clear</button>
+      <span id="draft" class="draft"></span>
+    </header>
+    <main id="surface"></main>
+    <aside id="stats" aria-live="off"></aside>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
