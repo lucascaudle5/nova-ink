@@ -6,6 +6,7 @@
   "description": "NOVA-owned handwriting engine spike: document model, stroke geometry, Canvas 2D renderer, pointer input, browser harness",
   "scripts": {
     "dev": "vite",
+    "dev:lan": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

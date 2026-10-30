@@ -115,17 +115,21 @@ Verification, October 29, 2026, this Windows PC:
 - v0.2.3 reference re-run in its own checkout: `npm test` 76/76, `tsc` clean, working tree unchanged.
 - Not verified: anything on iPad, Apple Pencil latency/pressure/coalescing, palm rejection with a real palm, running inside ChatGPT, side-by-side with tldraw.
 
-Recommendation (not yet a product decision): continue the NOVA-owned engine with Canvas 2D; escalate to WebGL only if a gesture-time bitmap cache cannot meet the zoomed-out target on iPad. Develop in engine/ until device numbers meet the criteria in ENGINE_ARCHITECTURE.md section 6, then integrate through an EditorPort adapter, read-only first. tldraw stays the working canvas throughout.
+Recommendation (not yet a product decision): continue the NOVA-owned engine with Canvas 2D; escalate to WebGL only if a gesture-time bitmap cache cannot meet the zoomed-out target on iPad. Develop in engine/ until device numbers meet the criteria in ENGINE_ARCHITECTURE.md section 6, then integrate through an EditorPort adapter. tldraw stays the working canvas until then.
 
-Open decisions (product owner):
-1. Approve or change the acceptance criteria (ENGINE_ARCHITECTURE.md section 6).
-2. Page model: infinite canvas or fixed pages (letter/A4, PDF pages, templates). Affects coordinates, export and the format.
-3. Fingers: navigation only (spike behaviour) or optional finger drawing when no Pencil is used.
-4. Storage of engine pages: wrap them in the existing snapshot envelope (no server change, but tldraw field names with different contents) or add an explicit, backward-compatible page kind/format field (server change). This changes the notebook data format, so it needs explicit approval.
-5. Existing canvases: convert once (non-destructive, new canvases) or keep them on tldraw read-only.
-6. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
-7. iPad testing route: LAN (`npx vite --host`, visible to the local network) for Safari; and a separate dev-only MCP resource/tool for the ChatGPT test, which changes the plugin/tunnel configuration and therefore needs approval.
-8. When to take down the Cloudflare test deployment (still running, see cloudflare/docs/CF_TEST_DEPLOYMENT.md).
+Engine decisions (user, October 29, 2026, 7:19 PM):
+- iPad testing over the home Wi-Fi is approved (`cd engine; npm run dev:lan`).
+- No side-by-side drawing comparison is required. The tldraw plugin and the engine plugin are each tested separately; criterion 1 is judged that way.
+- Fingers never draw (navigation only). This is the spike's behaviour and is now a product rule.
+- Infinite canvas, not fixed pages.
+- No compatibility between old tldraw notes and the new engine: no converter, and engine pages do not need to fit the tldraw snapshot envelope. The user does not need the old notes. This is not an instruction to delete them: existing data in %LOCALAPPDATA%\NOVA-Ink\data and the v0.2.3 app stay untouched; deleting them still needs an explicit request.
+
+Still open (product owner):
+1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
+2. Where engine pages are stored: a new store/format alongside v0.2.3 (no migration needed, per the decision above). Plan it before building; it still must not alter v0.2.3 data.
+3. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
+4. The engine plugin in ChatGPT: a separate dev-only MCP server/connector changes the plugin/tunnel setup; confirm before it is set up.
+5. When to take down the Cloudflare test deployment (still running, see cloudflare/docs/CF_TEST_DEPLOYMENT.md).
 
 Next engine milestone (bounded): (a) gesture-time bitmap cache: during pan/pinch, transform the last rendered base layer and re-render only at gesture end or when the cache runs out, with tests for invalidation on erase/undo/resize; target p95 frame interval ≤ 2 × refresh period at fit-all on this desktop; (b) the user runs the harness on iPad Safari and exports Results for criteria 1–6; (c) record the numbers here.
 

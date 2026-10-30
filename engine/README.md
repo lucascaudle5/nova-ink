@@ -13,7 +13,7 @@ npm run build          # typecheck + static harness build into dist/
 npm run bench          # model-side costs at 3,000 strokes; `-- --write` updates docs/bench-results.json
 ```
 
-For iPad Safari testing on the same Wi-Fi, `npx vite --host` serves the harness on the LAN (anyone on that network can open it; it holds only scratch strokes). Running it inside ChatGPT needs a separate MCP resource and is not built.
+For iPad Safari testing on the same Wi-Fi (approved by the user), `npm run dev:lan` serves the harness on the LAN and prints a `Network:` URL to open on the iPad. Anyone on that network can open it; it holds only scratch strokes. Running it inside ChatGPT needs a separate plugin and is not built.
 
 ## Layout
 

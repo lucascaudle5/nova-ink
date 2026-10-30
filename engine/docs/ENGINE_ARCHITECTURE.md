@@ -37,8 +37,8 @@ Rules kept in the spike: the engine has no idea a server, a lease, ChatGPT or Cl
 |---|---|
 | `src/session.ts` + its tests | As is. The engine needs an `EditorPort` adapter (getSnapshot = serialized page, setReadOnly) and a `validateSnapshot` that calls `parsePage`. |
 | `src/context.ts` | Viewport geometry and `DISCLOSURE` reusable; `makeCanvasContext` needs a stroke-based shape list. |
-| `storage.mjs`, `backup.mjs`, `server.ts` tools | Unchanged code could carry a NOVA page **only** if it is wrapped in the tldraw-shaped envelope. That is a notebook data format decision (open decision 4). |
-| `cloudflare/` CanvasDO | Same envelope question. Its record rule (`id` starts with `typeName:`) would accept one record per stroke (`stroke:<id>`), giving per-stroke change saves. Not tried. |
+| `storage.mjs`, `backup.mjs`, `server.ts` tools | Patterns (revisions, saveId, lease, backups) are reusable; the tldraw envelope is not needed, because the user decided engine pages need no compatibility with old notes. Engine pages get their own store/format (still to be planned). |
+| `cloudflare/` CanvasDO | Same storage design is reusable; one record per stroke (`stroke:<id>`) would give per-stroke change saves. Not tried. |
 | Top bar, banners, backups UI | As is. |
 | tldraw | Kept, untouched, as the reference and the working app. |
 
@@ -62,7 +62,7 @@ Renderer is behind a small interface (`Context2D`, `createPath`), so a WebGL ren
 - **Strokes are immutable** (frozen, private Float32 copy). Undo/redo stores references; erase restores original z-order (tested). Encoded strokes are cached, so autosave cost is proportional to new strokes.
 - **Fingers never draw.** One finger pans, two pan and zoom, computed from the gesture start (no drift). Pen-down cancels a finger gesture already in progress and touches landing during a stroke stay ignored until lifted (tested, including a mutation check). A system `pointercancel` keeps the stroke.
 - **Whole-stroke eraser** with a fixed screen-size radius and interpolation for fast moves; one gesture is one undo step.
-- **Precision.** In-memory points are Float32: under 0.004 page-unit error up to 100,000 units from the origin (tested); camera math is float64. The page format quantizes to 0.01 page units and 0.001 pressure.
+- **Precision.** In-memory points are Float32: under 0.004 page-unit error up to 100,000 units from the origin (tested); camera math is float64. The page format quantizes to 0.01 page units and 0.001 pressure. The user chose an infinite canvas, so far from the origin Float32 degrades (about 0.06 units at 1,000,000). Planned fix: store each stroke's points relative to a float64 stroke origin.
 - **Format `nova-ink` v1**: versioned JSON, per-stroke base64 of zigzag delta varints. Parsing refuses non-NOVA data, newer versions, duplicates, bad counts, truncation, out-of-range values ("refuse rather than guess", tested). Not used for any real notebook.
 - **Ids** use `crypto.getRandomValues`, because `crypto.randomUUID` is unavailable over plain HTTP (iPad on LAN).
 
@@ -72,7 +72,7 @@ Renderer is behind a small interface (`Context2D`, `createPath`), so a WebGL ren
 
 | # | Criterion | Target (on iPad, Safari and inside ChatGPT) | How measured | Status |
 |---|---|---|---|---|
-| 1 | Input to frame latency | p95 ≤ one refresh period + 4 ms, and not worse than tldraw by the user's side-by-side judgement | harness `input→frame` (event timestamp to end of the drawing frame; excludes compositing, so not photon latency) | not measured on iPad (synthetic events only on desktop) |
+| 1 | Input to frame latency | p95 ≤ one refresh period + 4 ms, and not worse than tldraw in the user's judgement (each plugin tested separately; no side-by-side setup) | harness `input→frame` (event timestamp to end of the drawing frame; excludes compositing, so not photon latency) | not measured on iPad (synthetic events only on desktop) |
 | 2 | No dropped samples | every delivered sample stored | unit test; harness `samples/event` | tested in Node |
 | 3 | Writing at 3,000 strokes | p95 frame time below refresh period while writing | harness frame ms | not measured on iPad |
 | 4a | Pan at writing zoom (~1×), 3,000-stroke page | p95 frame interval ≤ refresh period | Benchmark pan | desktop: 7.1 ms at 144 Hz, 867 strokes visible: pass |
@@ -103,14 +103,13 @@ Submit time is small; the cost is GPU/compositor rasterization of thousands of f
 
 1. **Now (done):** engine in `engine/` on `engine/spike`, in its own worktree (`..\nova-ink-engine`). The v0.2.3 checkout, its tests, server, tunnel and data are untouched. A self-contained package (like `cloudflare/`) keeps the engine independently testable while staying in the same repo for later integration; a separate repository would make the eventual `EditorPort` integration and shared tests harder.
 2. **Device spike:** measure the harness on iPad Safari, then inside ChatGPT next to tldraw. Fix zoomed-out pan (criterion 4b).
-3. **Adapter, read-only:** `EngineEditorPort` + an in-memory, non-destructive tldraw-to-NOVA converter for draw shapes, used only to view converted copies of disposable canvases next to tldraw. Nothing saved.
-4. **Opt-in new canvases:** after the storage-envelope decision, new canvases may use the engine behind a flag; existing canvases stay on tldraw. All session/recovery tests run against both editors.
-5. **Parity on iPad, then default.** Conversion of existing canvases only with explicit approval, after `npm run backup`, writing new canvases and never altering the originals. tldraw is removed only after that.
+3. **Engine plugin:** `EngineEditorPort` + its own page store (planned first), served as a separate ChatGPT plugin. The tldraw plugin keeps working unchanged; the user tests each plugin separately.
+4. **Parity on iPad, then switch.** No converter: the user decided old tldraw notes need no compatibility. Old data is left in place (not deleted) unless the user explicitly asks. tldraw is removed only after the engine plugin is accepted.
 
 ## 9. Known gaps (not built)
 
-Read-only mode and `EditorPort` adapter; viewport PNG export and shape context for Ask NOVA; gesture-time bitmap cache / tiles / level of detail; spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); partial (segment) eraser; lasso selection and transforms; colors/width UI; pages and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; tldraw converter; running inside ChatGPT.
+Read-only mode and `EditorPort` adapter; viewport PNG export and shape context for Ask NOVA; gesture-time bitmap cache / tiles / level of detail; spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); partial (segment) eraser; lasso selection and transforms; colors/width UI; pages and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; running inside ChatGPT.
 
 ## 10. Open decisions for the product owner
 
-See CODEX_HANDOFF.md → Drawing engine → Open decisions (kept in one place).
+Decisions made and still open are in CODEX_HANDOFF.md → "Engine spike status" (kept in one place).
