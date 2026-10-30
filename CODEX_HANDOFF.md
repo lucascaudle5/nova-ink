@@ -196,6 +196,8 @@ Still open (product owner):
 
 Next engine milestone (bounded): (a) done October 30: eraser, undo, zoom bar and paper styles work on the iPad (user-reported). The harness benchmark (Benchmark pan zoomed out with +3,000 strokes, in `engine/harness`, not the notebook app) is deferred by the user; run it when a page grows large or panning feels slow. (b) Stroke-relative coordinates for the infinite canvas.
 
+ChatGPT tools plan (draft, October 30, 2026): `engine/docs/PLAN_CHATGPT_TOOLS.md`. Ask NOVA in the engine app first, then page previews with read-only model tools, then model organization tools. Its open questions need the user's answers before phases 2 and 3.
+
 ### Long-term foundations
 - Data ownership: documented storage formats, PDF export, and tested off-machine backups so notes outlive any app, host, or AI provider.
 - Host independence: standalone browser mode alongside the ChatGPT MCP App, and AI requests behind one replaceable adapter.
