@@ -3,8 +3,8 @@ import { InkDocument } from '../core/document'
 import type { DocumentChange } from '../core/document'
 import { eraseFromStroke, strokesHitBy } from '../core/eraser'
 import { History } from '../core/history'
-import { createImage, dragRect, fitSize, imageAt, placeImage, rotateImage } from '../core/image'
-import type { Rect } from '../core/image'
+import { createImage, dragPlacement, fitSize, imageAt, placeImage, resizeHandle, rotateHandle, rotateImage } from '../core/image'
+import type { DragMode, Placement } from '../core/image'
 import { InputController } from '../core/input'
 import type { PointerInput, PointerKind, Tool } from '../core/input'
 import { Samples } from '../core/metrics'
@@ -66,6 +66,10 @@ const WHEEL_IDLE_MS = 150
 /** Resize handle: drawn this size, and grabbed within this distance (CSS px), at every zoom. */
 const HANDLE_PX = 14
 const HANDLE_HIT_PX = 26
+/** A finger is bigger than a pen tip: grab handles from further away. */
+const HANDLE_HIT_TOUCH_PX = 34
+/** The rotation handle sits this far (CSS px) out from the middle of the top edge, at every zoom. */
+const ROTATE_OFFSET_PX = 36
 
 interface Interaction { sources: Set<string>; snapshot: boolean; stale: boolean; refreshedAt: number }
 
@@ -110,7 +114,9 @@ export class InkSurface {
   private animation: { raf: number; target: Camera } | null = null
   private imageSource: ((image: string) => CanvasImageSource | null) | null = null
   private selected: string | null = null
-  private drag: { mode: 'move' | 'resize'; from: { x: number; y: number }; item: ImageItem; rect: Rect } | null = null
+  private drag: { mode: DragMode; from: { x: number; y: number }; item: ImageItem; place: Placement } | null = null
+  /** Called while a picture is being turned, with its angle (degrees), and with null when the turn ends. */
+  onTurnPreview: ((angle: number | null) => void) | null = null
 
   constructor(private readonly container: HTMLElement) {
     container.classList.add('nova-ink-surface')
@@ -146,7 +152,8 @@ export class InkSurface {
         this.schedule()
         this.notify()
       },
-      selectBegin: (p, screen) => this.selectBegin(p, screen),
+      selectBegin: (p, screen, kind) => this.selectBegin(p, screen, kind),
+      touchGrab: (p, screen) => this.pictureGrab(p, screen, 'touch') !== null,
       selectMove: p => this.selectMove(p),
       selectEnd: cancelled => this.selectEnd(cancelled),
       undo: () => this.undo(),
@@ -225,7 +232,7 @@ export class InkSurface {
     return items
   }
 
-  /** Turns the selected picture a quarter clockwise about its centre, as one undoable step; it stays selected. */
+  /** Turns the selected picture a quarter clockwise about its centre, as one undoable step; it stays selected. (Any angle: drag its rotation handle.) */
   rotateSelectedImage(): boolean {
     const current = this.selectedImage
     if (!current || this.readOnly) return false
@@ -254,31 +261,46 @@ export class InkSurface {
     this.notify()
   }
 
-  private selectBegin(p: { x: number; y: number }, screen: { x: number; y: number }) {
+  /**
+   * What a pen or finger at this point would grab: a handle of the selected picture (resize or rotate), or any picture
+   * to move (and select). Null when it lands on nothing.
+   */
+  private pictureGrab(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind): { mode: DragMode; item: ImageItem } | null {
+    const reach = kind === 'touch' ? HANDLE_HIT_TOUCH_PX : HANDLE_HIT_PX
     const current = this.selectedImage
     if (current) {
-      const corner = toScreen(this.camera, current.x + current.w, current.y + current.h)
-      if (Math.hypot(screen.x - corner.x, screen.y - corner.y) <= HANDLE_HIT_PX) { this.drag = { mode: 'resize', from: p, item: current, rect: current }; return }
+      const near = (page: { x: number; y: number }) => { const sp = toScreen(this.camera, page.x, page.y); return Math.hypot(screen.x - sp.x, screen.y - sp.y) <= reach }
+      if (near(resizeHandle(current))) return { mode: 'resize', item: current }
+      if (near(rotateHandle(current, ROTATE_OFFSET_PX / this.camera.z))) return { mode: 'rotate', item: current }
     }
     const hit = imageAt(this.doc.images, p.x, p.y)
-    this.select(hit?.id ?? null)
-    this.drag = hit ? { mode: 'move', from: p, item: hit, rect: hit } : null
+    return hit ? { mode: 'move', item: hit } : null
+  }
+
+  private selectBegin(p: { x: number; y: number }, screen: { x: number; y: number }, kind: PointerKind) {
+    const grab = this.pictureGrab(p, screen, kind)
+    if (grab && grab.mode !== 'move') { this.drag = { mode: grab.mode, from: p, item: grab.item, place: grab.item }; return }
+    this.select(grab?.item.id ?? null)
+    this.drag = grab ? { mode: 'move', from: p, item: grab.item, place: grab.item } : null
   }
 
   private selectMove(p: { x: number; y: number }) {
     const drag = this.drag
     if (!drag) return
-    drag.rect = dragRect(drag.item, drag.mode, drag.from, p)
+    drag.place = dragPlacement(drag.item, drag.mode, drag.from, p)
     this.invalidateScene()
     this.needsLive = true
+    if (drag.mode === 'rotate') this.onTurnPreview?.(drag.place.angle)
   }
 
   private selectEnd(cancelled: boolean) {
     const drag = this.drag
     this.drag = null
+    if (drag?.mode === 'rotate') this.onTurnPreview?.(null)
     if (!drag) return
-    const r = drag.rect, i = drag.item
-    const moved = Math.abs(r.x - i.x) + Math.abs(r.y - i.y) + Math.abs(r.w - i.w) > 0.5 / this.camera.z
+    const r = drag.place, i = drag.item
+    const turned = Math.abs(((r.angle - i.angle + 540) % 360) - 180) > 0.2
+    const moved = Math.abs(r.x - i.x) + Math.abs(r.y - i.y) + Math.abs(r.w - i.w) > 0.5 / this.camera.z || turned
     if (!cancelled && moved && this.doc.getImage(i.id)) {
       const next = placeImage(i, r)
       this.history.replaceImage(i.id, next)
@@ -607,7 +629,7 @@ export class InkSurface {
       else if (this.eraser) {
         const p = toScreen(this.camera, this.eraser.x, this.eraser.y)
         this.renderer.drawEraser(p.x, p.y, this.eraser.r * this.camera.z)
-      } else if (this.drag || this.selectedImage) this.renderer.drawSelection(this.drag?.rect ?? this.selectedImage!, this.camera, HANDLE_PX)
+      } else if (this.drag || this.selectedImage) this.renderer.drawSelection(this.drag?.place ?? this.selectedImage!, this.camera, HANDLE_PX, ROTATE_OFFSET_PX)
       else this.renderer.clearLive()
       this.needsLive = false
     }
@@ -623,7 +645,7 @@ export class InkSurface {
     const drag = this.drag
     // While dragging, the placement is drawn where it is going; the document changes only on release.
     const images = drag
-      ? this.doc.images.map(i => i.id === drag.item.id ? { ...i, ...drag.rect } : i)
+      ? this.doc.images.map(i => i.id === drag.item.id ? { ...i, ...drag.place } : i)
       : this.doc.queryImages(view)
     const { ms } = this.renderer.drawScene(visible, this.camera, undefined, images)
     this.metrics.sceneMs.push(ms)

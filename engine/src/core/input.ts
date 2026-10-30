@@ -3,7 +3,7 @@ import type { GestureFrame } from './camera'
 import type { Camera } from './types'
 
 export type PointerKind = 'pen' | 'touch' | 'mouse'
-/** 'select' picks, moves and resizes images with the pen or mouse. */
+/** 'select' picks, moves, resizes and turns images with the pen or mouse, and with a finger that lands on a picture. */
 export type Tool = 'pen' | 'eraser' | 'select'
 
 /** One input sample in screen (CSS pixel) coordinates. `t` is the event timestamp in ms. */
@@ -34,9 +34,14 @@ export interface InputHandlers {
   eraseAt(x: number, y: number, radius: number): void
   eraseEnd(): void
   /** Select tool. Positions are page coordinates; `screen` is the same point in CSS pixels (for handle hits). */
-  selectBegin?(sample: PageSample, screen: PointerSample): void
+  selectBegin?(sample: PageSample, screen: PointerSample, kind: PointerKind): void
   selectMove?(sample: PageSample): void
   selectEnd?(cancelled: boolean): void
+  /**
+   * Select tool, finger down with no other finger down: true when the finger landed on a picture or one of its handles,
+   * so it drags the picture (selectBegin/selectMove/selectEnd) instead of panning the page.
+   */
+  touchGrab?(sample: PageSample, screen: PointerSample): boolean
   /** Quick two-finger tap. */
   undo?(): void
   /** Quick three-finger tap. */
@@ -73,6 +78,8 @@ export class InputController {
   eraserRadiusPx: number
   private inkPointer: number | null = null
   private inkMode: Tool | null = null
+  /** A finger dragging a picture (select tool), or null. */
+  private grab: number | null = null
   private lastErase: { x: number; y: number } | null = null
   private touches = new Map<number, { x: number; y: number }>()
   private ignored = new Set<number>()
@@ -98,6 +105,7 @@ export class InputController {
     if (samples.length && (phase === 'down' ? this.inkPointer === null : id === this.inkPointer)) this.lastInkT = samples[samples.length - 1].t
     if (phase === 'down') {
       if (this.readOnly || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
+      if (this.grab !== null) { this.handlers.selectEnd?.(true); this.ignored.add(this.grab); this.grab = null }
       for (const touchId of this.touches.keys()) this.ignored.add(touchId)
       this.touches.clear()
       this.gesture = null
@@ -109,7 +117,7 @@ export class InputController {
         this.handlers.strokeBegin(first)
         if (rest.length) this.handlers.strokeExtend(rest)
       } else if (this.inkMode === 'select') {
-        this.handlers.selectBegin?.(this.toPageSample(samples[0]), samples[0])
+        this.handlers.selectBegin?.(this.toPageSample(samples[0]), samples[0], event.kind)
       } else {
         this.handlers.eraseBegin()
         this.lastErase = null
@@ -137,9 +145,26 @@ export class InputController {
   private handleTouch(event: PointerInput) {
     const { phase, id, samples } = event
     const last = samples[samples.length - 1]
+    if (this.grab !== null && id === this.grab) {
+      if (last && phase === 'move') this.handlers.selectMove?.(this.toPageSample(last))
+      if (phase === 'up' || phase === 'cancel') {
+        if (last && phase === 'up') this.handlers.selectMove?.(this.toPageSample(last))
+        this.handlers.selectEnd?.(phase === 'cancel')
+        this.grab = null
+      }
+      return
+    }
     if (phase === 'down') {
-      if (this.inkPointer !== null) { this.ignored.add(id); return }
+      if (this.inkPointer !== null || this.grab !== null) { this.ignored.add(id); return }
       if (!last) return
+      if (!this.touches.size && !this.readOnly && this.tool === 'select') {
+        const page = this.toPageSample(last)
+        if (this.handlers.touchGrab?.(page, last)) {
+          this.grab = id
+          this.handlers.selectBegin?.(page, last, 'touch')
+          return
+        }
+      }
       if (!this.touches.size) {
         this.tap = last.t - this.penUpAt >= PEN_QUIET_MS
           ? { t: last.t, camera: this.handlers.getCamera(), fingers: 0, moved: false, starts: new Map() }

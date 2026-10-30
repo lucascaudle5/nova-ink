@@ -159,7 +159,7 @@ Why Cloudflare suits the engine better than it suited tldraw: strokes never chan
 
 ## 9. Known gaps (not built)
 
-Whole-page PNG export for page previews (Phase 2 of PLAN_CHATGPT_TOOLS.md; the visible-view export and Ask NOVA context are built, Phase 1); tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms of ink; picture cropping and free rotation (quarter turns are built); predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; page reordering in the app UI (the server tool exists); verified running inside ChatGPT.
+Whole-page PNG export for page previews (Phase 2 of PLAN_CHATGPT_TOOLS.md; the visible-view export and Ask NOVA context are built, Phase 1); tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms of ink; picture cropping (free rotation and finger move/resize/turn are built); predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; page reordering in the app UI (the server tool exists); verified running inside ChatGPT.
 
 ## 10. Open decisions for the product owner
 

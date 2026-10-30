@@ -149,6 +149,9 @@ if (preview) {
   api = hostApi(app)
 }
 
+/** The angle shown while a picture is being turned by its handle, or null. */
+let turning: number | null = null
+
 const session = new NotebookSession({ api, clientId: persistentClientId(), editor })
 surface.onChange(() => { session.changed(); renderImageBar() })
 
@@ -281,6 +284,8 @@ const imageFile = $<HTMLInputElement>('image-file')
 $('insert-image').addEventListener('click', () => { tools.closePopover(); imageFile.value = ''; imageFile.click() })
 imageFile.addEventListener('change', () => { const file = imageFile.files?.[0]; if (file) void insertPicture(file) })
 $('image-rotate').addEventListener('click', () => surface.rotateSelectedImage())
+// While a picture is being turned by its handle, show the angle in the picture bar.
+surface.onTurnPreview = angle => { turning = angle; renderImageBar() }
 $('image-delete').addEventListener('click', () => surface.deleteSelectedImage())
 $('image-done').addEventListener('click', () => surface.setTool('pen'))
 
@@ -291,7 +296,10 @@ window.addEventListener('keydown', e => {
 if (preview) Object.assign(window, { novaInsertPicture: insertPicture, novaSurface: surface })
 
 function renderImageBar() {
-  $('image-bar').hidden = !surface.selectedImage
+  const picture = surface.selectedImage
+  $('image-bar').hidden = !picture
+  const angle = turning ?? picture?.angle ?? 0
+  $('image-label').textContent = angle ? `Picture selected · ${Math.round(angle)}°` : 'Picture selected'
   $<HTMLButtonElement>('insert-image').disabled = inserting || surface.readOnly
 }
 
@@ -804,7 +812,7 @@ function askSheet() {
     hint.textContent = HELP_LEVELS[askLevel].instruction
   }
   paintLevels()
-  const question = el('textarea', { className: 'ask-question', placeholder: 'What do you want help with?', maxLength: MAX_QUESTION, ariaLabel: 'Question' })
+  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for ChatGPT if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
   const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
   const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
   const send = action('Send', async () => {
@@ -816,7 +824,7 @@ function askSheet() {
     send.disabled = false
     if (sent) question.value = ''
   }, 'text primary')
-  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Question'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), send])
+  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), send])
   setTimeout(() => question.focus())
 }
 $('ask-button').addEventListener('click', askSheet)

@@ -3,8 +3,8 @@ import { DEFAULT_PAPER, isPaper } from './paper'
 import type { Paper } from './paper'
 import { createImage, IMAGE_ID } from './image'
 import { createStroke, MAX_POINTS_PER_STROKE } from './stroke'
-import { isImage, POINT_STRIDE, ROTATIONS } from './types'
-import type { Author, ImageItem, PageItem, Rotation, Stroke } from './types'
+import { isImage, POINT_STRIDE } from './types'
+import type { Author, ImageItem, PageItem, Stroke } from './types'
 
 /**
  * NOVA ink page format, version 1 (experimental: not used by any saved notebook yet).
@@ -138,9 +138,12 @@ export function parseStroke(data: unknown, where = 'Stroke'): { ok: true; stroke
 export const STROKE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
- * An image placement as stored per row: { id, kind: "image", author, createdAt, image, x, y, w, h, rotation? }.
- * Positions are kept to 0.01 page units. `image` names a picture stored separately by the host.
- * `rotation` is written only when it is not 0, so unrotated rows read the same in older versions.
+ * An image placement as stored per row: { id, kind: "image", author, createdAt, image, x, y, w, h, angle? }.
+ * x, y, w, h describe the unturned rectangle; `angle` is degrees clockwise about its centre. Positions are kept
+ * to 0.01 page units. `image` names a picture stored separately by the host.
+ * `angle` is written only when it is not 0, so unturned rows read the same in older versions.
+ * Reading also accepts the earlier quarter-turn field `rotation` (90, 180, 270), where x, y, w, h were the area the
+ * turned picture covered; it is converted on read and never written.
  */
 export interface SerializedImage {
   id: string
@@ -152,7 +155,7 @@ export interface SerializedImage {
   y: number
   w: number
   h: number
-  rotation?: Rotation
+  angle?: number
 }
 export type SerializedItem = SerializedStroke | SerializedImage
 
@@ -165,7 +168,7 @@ export function serializeImage(i: ImageItem): SerializedImage {
     out = Object.freeze({
       id: i.id, kind: 'image' as const, author: i.author, createdAt: i.createdAt, image: i.image,
       x: round2(i.x), y: round2(i.y), w: round2(i.w), h: round2(i.h),
-      ...(i.rotation ? { rotation: i.rotation } : {}),
+      ...(i.angle ? { angle: round2(i.angle) } : {}),
     })
     encodedImages.set(i, out)
   }
@@ -184,9 +187,19 @@ export function parseImage(data: unknown, where = 'Image'): { ok: true; image: I
   if (!AUTHORS.includes(s.author as Author)) return bad('has an unknown author.')
   if (typeof s.createdAt !== 'number' || !Number.isFinite(s.createdAt)) return bad('has an invalid time.')
   if (typeof s.image !== 'string' || !IMAGE_ID.test(s.image)) return bad('has an invalid picture reference.')
-  if (s.rotation !== undefined && !ROTATIONS.includes(s.rotation)) return bad('has an invalid rotation.')
+  const legacy = (s as { rotation?: unknown }).rotation
+  if (s.angle !== undefined && (typeof s.angle !== 'number' || !Number.isFinite(s.angle) || s.angle <= -360 || s.angle >= 360)) return bad('has an invalid angle.')
+  if (legacy !== undefined && ![0, 90, 180, 270].includes(legacy as number)) return bad('has an invalid rotation.')
+  if (legacy !== undefined && s.angle !== undefined) return bad('has both an angle and a rotation.')
   try {
-    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x: s.x as number, y: s.y as number, w: s.w as number, h: s.h as number, rotation: s.rotation }) }
+    let { x, y, w, h } = s as { x: number; y: number; w: number; h: number }
+    let angle = s.angle ?? 0
+    if (typeof legacy === 'number' && legacy !== 0) {
+      // Earlier quarter-turn rows stored the covered area; at 90 and 270 the picture's own sides are swapped.
+      angle = legacy
+      if (legacy % 180 !== 0) { const cx = x + w / 2, cy = y + h / 2; [w, h] = [h, w]; x = cx - w / 2; y = cy - h / 2 }
+    }
+    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x, y, w, h, angle }) }
   } catch (error) {
     return bad(`has an invalid position or size (${error instanceof Error ? error.message : String(error)}).`)
   }

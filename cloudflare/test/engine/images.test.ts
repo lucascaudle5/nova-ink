@@ -89,9 +89,26 @@ describe('pictures', () => {
     const client = crypto.randomUUID()
     await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
     const key = keyBetween(null, null)
+    // A legacy quarter-turn row is stored in the free-angle form (same picture, same place on the page).
     const row = { ...imageRow('r1', 'pic-3'), rotation: 270 }
+    const converted = { ...imageRow('r1', 'pic-3'), x: 60, y: -30, w: 200, h: 300, angle: 270 }
     expect(await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'r1', baseRevision: 0, adds: [{ key, stroke: row }] })).toMatchObject({ ok: true, revision: 1 })
     const reopened = await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
+    expect(JSON.parse(reopened.rows)).toEqual([{ key, stroke: converted }])
+  })
+
+  it('a freely turned picture keeps its angle, and a row with both angle and rotation is refused', async () => {
+    const token = (await signIn())!
+    expect(await tool(token, 'nb_put_image', { imageId: 'pic-4', mime: 'image/jpeg', width: 10, height: 10, bytes: 1000, count: 1, index: 0, data: b64(fakeJpeg(1000)) })).toMatchObject({ ok: true, complete: true })
+    const created = await tool(token, 'nb_create_notebook', { name: 'Free turn' })
+    const client = crypto.randomUUID()
+    await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
+    const key = keyBetween(null, null)
+    const row = { ...imageRow('f1', 'pic-4'), angle: 37.46 }
+    expect(await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'f1', baseRevision: 0, adds: [{ key, stroke: row }] })).toMatchObject({ ok: true, revision: 1 })
+    const reopened = await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
     expect(JSON.parse(reopened.rows)).toEqual([{ key, stroke: row }])
+    const both = await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'f2', baseRevision: 1, adds: [{ key: keyBetween(key, null), stroke: { ...imageRow('f2', 'pic-4'), angle: 10, rotation: 90 } }] })
+    expect(both).toMatchObject({ ok: false, code: 'INVALID_STROKE' })
   })
 })

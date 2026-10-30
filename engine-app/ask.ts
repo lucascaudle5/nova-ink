@@ -30,6 +30,7 @@ export interface AskInput {
   visibleStrokes: number
   visiblePictures: number
   helpLevel: HelpLevel
+  /** The student's optional note; empty when they just picked a level. */
   question: string
 }
 
@@ -40,7 +41,8 @@ export interface AskContext {
   zoomPercent: number
   visible: { strokes: number; pictures: number }
   helpLevel: string
-  question: string
+  /** Null when the student added no note. */
+  note: string | null
 }
 
 /** The short description sent with the picture. Counts only; never stroke coordinates. */
@@ -52,7 +54,7 @@ export function askContext(input: AskInput): AskContext {
     zoomPercent: Math.round(input.zoom * 100),
     visible: { strokes: input.visibleStrokes, pictures: input.visiblePictures },
     helpLevel: HELP_LEVELS[input.helpLevel].label,
-    question: input.question.trim().slice(0, MAX_QUESTION),
+    note: input.question.trim().slice(0, MAX_QUESTION) || null,
   }
 }
 
@@ -63,14 +65,13 @@ export function askText(input: AskInput): string {
     'Student-initiated request from NOVA Ink. The picture is exactly what is on the student\'s screen now.',
     `Help level: ${context.helpLevel}. ${HELP_LEVELS[input.helpLevel].instruction}`,
     'Do not draw on or change the notebook, and do not offer more help than this level.',
-    `Question: ${context.question}`,
+    context.note ? `Student's note: ${context.note}` : 'The student added no note; answer for the chosen help level from what is on screen.',
     `Context: ${JSON.stringify(context)}`,
   ].join('\n')
 }
 
-/** A reason nothing should be sent, or null when the request is fine. */
-export function askRefusal(input: { question: string; visibleStrokes: number; visiblePictures: number }, imageBase64Length: number | null): string | null {
-  if (!input.question.trim()) return 'Type a question before sending.'
+/** A reason nothing should be sent, or null when the request is fine. A note is optional. */
+export function askRefusal(input: { visibleStrokes: number; visiblePictures: number }, imageBase64Length: number | null): string | null {
   if (input.visibleStrokes + input.visiblePictures === 0) return 'There is no work on screen to show ChatGPT. Pan to your work first.'
   if (imageBase64Length !== null && imageBase64Length > MAX_IMAGE_BASE64) return 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.'
   return null

@@ -9,7 +9,7 @@ export interface Context2D {
   setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void
   clearRect(x: number, y: number, w: number, h: number): void
   fillRect(x: number, y: number, w: number, h: number): void
-  fill(path: never): void
+  fill(path?: never): void
   drawImage(image: never, dx: number, dy: number, dw: number, dh: number): void
   beginPath(): void
   arc(x: number, y: number, radius: number, start: number, end: number): void
@@ -118,47 +118,63 @@ export class CanvasRenderer {
     return { drawn: strokes.length + images.length, ms: now() - start }
   }
 
-  /** Selection frame and resize handle for one placement, on the live layer. */
-  drawSelection(image: { x: number; y: number; w: number; h: number }, camera: Camera, handlePx: number): void {
+  /**
+   * Selection frame for one placement, turned with it, on the live layer: a resize handle (a square) on the bottom-right
+   * corner and a rotation handle (a ring) `rotateOffsetPx` above the middle of the top edge, joined by a stem.
+   */
+  drawSelection(image: { x: number; y: number; w: number; h: number; angle: number }, camera: Camera, handlePx: number, rotateOffsetPx: number): void {
     const live = this.ctx.live
     this.clear(live)
-    live.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
-    const x = (image.x - camera.x) * camera.z, y = (image.y - camera.y) * camera.z
-    const w = image.w * camera.z, h = image.h * camera.z
+    const a = (image.angle * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a), d = this.dpr
+    const cx = (image.x + image.w / 2 - camera.x) * camera.z, cy = (image.y + image.h / 2 - camera.y) * camera.z
+    // Draw in CSS pixels around the picture's centre, turned with the picture.
+    live.setTransform(d * cos, d * sin, -d * sin, d * cos, cx * d, cy * d)
+    const hw = (image.w * camera.z) / 2, hh = (image.h * camera.z) / 2
     live.globalAlpha = 1
     live.fillStyle = '#1f6feb'
     const t = 1.5
-    live.fillRect(x - t, y - t, w + 2 * t, t * 2); live.fillRect(x - t, y + h - t, w + 2 * t, t * 2)
-    live.fillRect(x - t, y - t, t * 2, h + 2 * t); live.fillRect(x + w - t, y - t, t * 2, h + 2 * t)
+    live.fillRect(-hw - t, -hh - t, hw * 2 + 2 * t, t * 2); live.fillRect(-hw - t, hh - t, hw * 2 + 2 * t, t * 2)
+    live.fillRect(-hw - t, -hh - t, t * 2, hh * 2 + 2 * t); live.fillRect(hw - t, -hh - t, t * 2, hh * 2 + 2 * t)
+    // Stem and ring of the rotation handle.
+    live.fillRect(-0.75, -hh - rotateOffsetPx, 1.5, rotateOffsetPx)
+    const r = handlePx * 0.7
+    live.beginPath()
+    live.arc(0, -hh - rotateOffsetPx, r, 0, Math.PI * 2)
+    live.fillStyle = '#ffffff'
+    live.fill()
+    live.strokeStyle = '#1f6feb'
+    live.lineWidth = 2.5
+    live.stroke()
+    // Resize handle.
     const s = handlePx
     live.fillStyle = '#ffffff'
-    live.fillRect(x + w - s / 2 - 1.5, y + h - s / 2 - 1.5, s + 3, s + 3)
+    live.fillRect(hw - s / 2 - 1.5, hh - s / 2 - 1.5, s + 3, s + 3)
     live.fillStyle = '#1f6feb'
-    live.fillRect(x + w - s / 2, y + h - s / 2, s, s)
+    live.fillRect(hw - s / 2, hh - s / 2, s, s)
   }
 
   private drawImageItem(ctx: Context2D, image: ImageItem, camera: Camera) {
     const source = this.options.imageSource?.(image.image)
-    if (source && image.rotation) {
-      // Draw the unrotated picture centred on the origin, under camera x rotation about the area's centre.
-      const s = camera.z * this.dpr, a = (image.rotation * Math.PI) / 180
-      const cos = Math.round(Math.cos(a)), sin = Math.round(Math.sin(a))
-      const sideways = image.rotation % 180 !== 0
-      const pw = sideways ? image.h : image.w, ph = sideways ? image.w : image.h
+    // A turned picture is drawn unturned around the origin, under a transform that turns it about its centre.
+    const turned = image.angle !== 0
+    if (turned) {
+      const s = camera.z * this.dpr, a = (image.angle * Math.PI) / 180
+      const cos = Math.cos(a), sin = Math.sin(a)
       ctx.setTransform(s * cos, s * sin, -s * sin, s * cos, (image.x + image.w / 2 - camera.x) * s, (image.y + image.h / 2 - camera.y) * s)
-      ctx.drawImage(source as never, -pw / 2, -ph / 2, pw, ph)
-      this.applyCamera(ctx, camera)
-      return
     }
-    if (source) { ctx.drawImage(source as never, image.x, image.y, image.w, image.h); return }
-    // Not loaded (yet): a quiet placeholder of the right size, so the layout never jumps.
-    const dark = PAPER_COLORS[this.paperStyle.color].dark
-    ctx.fillStyle = dark ? 'rgba(255,255,255,.08)' : 'rgba(27,31,36,.06)'
-    ctx.fillRect(image.x, image.y, image.w, image.h)
-    ctx.fillStyle = dark ? 'rgba(255,255,255,.22)' : 'rgba(27,31,36,.18)'
-    const t = 1 / camera.z
-    ctx.fillRect(image.x, image.y, image.w, t); ctx.fillRect(image.x, image.y + image.h - t, image.w, t)
-    ctx.fillRect(image.x, image.y, t, image.h); ctx.fillRect(image.x + image.w - t, image.y, t, image.h)
+    const x = turned ? -image.w / 2 : image.x, y = turned ? -image.h / 2 : image.y
+    if (source) ctx.drawImage(source as never, x, y, image.w, image.h)
+    else {
+      // Not loaded (yet): a quiet placeholder of the right size, so the layout never jumps.
+      const dark = PAPER_COLORS[this.paperStyle.color].dark
+      ctx.fillStyle = dark ? 'rgba(255,255,255,.08)' : 'rgba(27,31,36,.06)'
+      ctx.fillRect(x, y, image.w, image.h)
+      ctx.fillStyle = dark ? 'rgba(255,255,255,.22)' : 'rgba(27,31,36,.18)'
+      const t = 1 / camera.z
+      ctx.fillRect(x, y, image.w, t); ctx.fillRect(x, y + image.h - t, image.w, t)
+      ctx.fillRect(x, y, t, image.h); ctx.fillRect(x + image.w - t, y, t, image.h)
+    }
+    if (turned) this.applyCamera(ctx, camera)
   }
 
   /** Incremental: adds one committed stroke on top of the base layer. */

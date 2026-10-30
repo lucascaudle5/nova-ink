@@ -13,13 +13,24 @@ test('context describes the page, zoom, counts, level and trimmed question, and 
   assert.deepEqual(context, {
     source: 'nova-ink-engine', notebook: 'Dynamics',
     page: { title: 'HW 6', number: 3, of: 5, paper: 'cream graph' },
-    zoomPercent: 126, visible: { strokes: 42, pictures: 1 }, helpLevel: 'Check my work', question: 'Is my free-body diagram right?',
+    zoomPercent: 126, visible: { strokes: 42, pictures: 1 }, helpLevel: 'Check my work', note: 'Is my free-body diagram right?',
   })
   assert.equal(JSON.stringify(context).includes('points'), false)
 })
 
-test('the question is cut to 1,200 characters', () => {
-  assert.equal(askContext({ ...input, question: 'x'.repeat(5000) }).question.length, MAX_QUESTION)
+test('the note is cut to 1,200 characters', () => {
+  assert.equal(askContext({ ...input, question: 'x'.repeat(5000) }).note?.length, MAX_QUESTION)
+})
+
+test('a note is optional: without one the message says so and still carries the level', () => {
+  for (const question of ['', '   \n ']) {
+    assert.equal(askContext({ ...input, question }).note, null)
+    const text = askText({ ...input, question })
+    assert.ok(text.includes('The student added no note'))
+    assert.ok(!text.includes("Student's note"))
+    assert.ok(text.includes(HELP_LEVELS.check.instruction))
+  }
+  assert.ok(askText(input).includes("Student's note: Is my free-body diagram right?"))
 })
 
 test('every help level has one fixed instruction, and its text is sent with the message', () => {
@@ -40,10 +51,9 @@ test('the message is the text followed by the PNG', () => {
   assert.deepEqual(message.content[1], { type: 'image', data: 'AAAA', mimeType: 'image/png' })
 })
 
-test('nothing is sent for an empty question, an empty view, or an image over 3 MB', () => {
-  const ok = { question: 'why?', visibleStrokes: 1, visiblePictures: 0 }
+test('nothing is sent for an empty view or an image over 3 MB; an empty note is fine', () => {
+  const ok = { visibleStrokes: 1, visiblePictures: 0 }
   assert.equal(askRefusal(ok, 1000), null)
-  assert.match(askRefusal({ ...ok, question: '   ' }, 1000)!, /question/)
   assert.match(askRefusal({ ...ok, visibleStrokes: 0 }, 1000)!, /no work on screen/)
   assert.equal(askRefusal({ ...ok, visibleStrokes: 0, visiblePictures: 1 }, 1000), null, 'a picture alone is work')
   assert.match(askRefusal(ok, MAX_IMAGE_BASE64 + 1)!, /too large/)
