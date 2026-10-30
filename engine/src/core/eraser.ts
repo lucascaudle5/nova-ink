@@ -66,7 +66,7 @@ export function eraseFromStroke(stroke: Stroke, x: number, y: number, radius: nu
   if (!cut) return null
   return pieces
     .filter(points => points.length >= 2 * POINT_STRIDE)
-    .map(points => createStroke({ points, style: stroke.style, author: stroke.author, createdAt: stroke.createdAt }))
+    .map(points => createStroke({ points, style: stroke.style, author: stroke.author, createdAt: stroke.createdAt, group: stroke.group }))
 }
 
 /** Part of segment i..i+1 (as t in [0, 1]) strictly inside the circle, or null. */

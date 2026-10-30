@@ -28,6 +28,8 @@ export interface Stroke {
   readonly style: StrokeStyle
   /** Flat [x, y, pressure, dt, x, y, ...]. Float32 keeps 3,000 strokes near 7 MB; see docs for precision. */
   readonly points: Float32Array
+  /** Optional group this mark belongs to (a diagram NOVA drew, a problem and its working). Survives moves, resizes and restyles. */
+  readonly group?: string
   /** Point bounds padded by half the stroke width. */
   readonly bounds: Bounds
   /** Epoch milliseconds. */
@@ -51,6 +53,8 @@ export interface ImageItem {
   readonly h: number
   /** Degrees clockwise about the centre of that rectangle, 0 up to (not including) 360. */
   readonly angle: number
+  /** Optional group this picture belongs to; see Stroke.group. */
+  readonly group?: string
   /** The smallest axis-aligned box around the turned picture (used for culling and hit pre-checks). */
   readonly bounds: Bounds
   readonly createdAt: number

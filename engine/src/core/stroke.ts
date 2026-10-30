@@ -19,6 +19,7 @@ export interface StrokeInput {
   id?: string
   author?: Author
   createdAt?: number
+  group?: string
 }
 
 /** Freezes input into an immutable stroke with a private copy of its points. */
@@ -36,5 +37,6 @@ export function createStroke(input: StrokeInput): Stroke {
     points,
     bounds: Object.freeze(pointBounds(points, style.width / 2 + 1)),
     createdAt: input.createdAt ?? Date.now(),
+    ...(input.group ? { group: input.group } : {}),
   })
 }

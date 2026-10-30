@@ -294,7 +294,7 @@ export class PageDO extends DurableObject {
         // Only known fields are stored; an image row refers to a picture the MCP layer checked exists.
         const json = isImage(item)
           ? JSON.stringify(serializeImage(item))
-          : JSON.stringify({ id: s.id, author: s.author, color: s.color, width: s.width, createdAt: s.createdAt, n: s.n, points: s.points })
+          : JSON.stringify({ id: s.id, author: s.author, color: s.color, width: s.width, createdAt: s.createdAt, n: s.n, points: s.points, ...(s.group ? { group: s.group } : {}) })
         if (encoder.encode(json).length > MAX_STROKE_BYTES) return fail('INVALID_STROKE', `Added stroke ${i + 1} is too large. Nothing was saved.`)
         rows.push({ id: item.id, key: add.key, json })
       }

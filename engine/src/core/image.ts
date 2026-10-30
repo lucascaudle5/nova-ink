@@ -20,6 +20,7 @@ export interface ImageInput {
   id?: string
   author?: Author
   createdAt?: number
+  group?: string
 }
 
 /** An angle in degrees as 0 (inclusive) to 360 (exclusive), kept to 0.01°. */
@@ -52,6 +53,7 @@ export function createImage(input: ImageInput): ImageItem {
     x, y, w, h, angle,
     bounds: Object.freeze(turnedBounds(x, y, w, h, angle)),
     createdAt: input.createdAt ?? Date.now(),
+    ...(input.group ? { group: input.group } : {}),
   })
 }
 
@@ -59,7 +61,7 @@ export function createImage(input: ImageInput): ImageItem {
 export function placeImage(item: ImageItem, place: Partial<Placement>): ImageItem {
   // Only the placement is taken from place: it may be a whole picture (a drag keeps one), and its id must not carry over.
   const { x, y, w, h, angle } = { x: item.x, y: item.y, w: item.w, h: item.h, angle: item.angle, ...place }
-  return createImage({ image: item.image, author: item.author, x, y, w, h, angle })
+  return createImage({ image: item.image, author: item.author, x, y, w, h, angle, group: item.group })
 }
 
 /** The picture turned `degrees` (default a quarter, clockwise) about its centre: a new placement. */

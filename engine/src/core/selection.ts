@@ -53,7 +53,7 @@ export function transformStroke(stroke: Stroke, t: Similarity): Stroke {
     points[i + 1] = b * x + d * y + f
   }
   const width = Math.min(MAX_STROKE_WIDTH, Math.max(MIN_STROKE_WIDTH, Math.round(stroke.style.width * t.s * 100) / 100))
-  return createStroke({ points, style: { color: stroke.style.color, width }, author: stroke.author, createdAt: stroke.createdAt })
+  return createStroke({ points, style: { color: stroke.style.color, width }, author: stroke.author, createdAt: stroke.createdAt, group: stroke.group })
 }
 
 /** Where a picture's placement lands under the transform (no new picture is made). */
@@ -66,12 +66,12 @@ export function transformPlacement(image: Placement, t: Similarity): Placement {
 /** The picture moved, scaled and turned: a new placement (new id) of the same stored picture. */
 export function transformImage(image: ImageItem, t: Similarity): ImageItem {
   const p = transformPlacement(image, t)
-  return createImage({ image: image.image, author: image.author, ...p, createdAt: image.createdAt })
+  return createImage({ image: image.image, author: image.author, ...p, createdAt: image.createdAt, group: image.group })
 }
 
 /** The stroke with a new colour and/or width: a new stroke (new id) with the same points. */
 export function restyleStroke(stroke: Stroke, style: Partial<StrokeStyle>): Stroke {
-  return createStroke({ points: stroke.points, style: { color: style.color ?? stroke.style.color, width: style.width ?? stroke.style.width }, author: stroke.author, createdAt: stroke.createdAt })
+  return createStroke({ points: stroke.points, style: { color: style.color ?? stroke.style.color, width: style.width ?? stroke.style.width }, author: stroke.author, createdAt: stroke.createdAt, group: stroke.group })
 }
 
 /** The stroke shifted by (dx, dy): a new stroke (new id). For duplicates. */

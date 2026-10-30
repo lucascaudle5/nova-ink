@@ -29,6 +29,8 @@ export interface SerializedStroke {
   createdAt: number
   n: number
   points: string
+  /** Optional; written only when set, so ungrouped rows read the same in older versions. */
+  group?: string
 }
 
 export interface SerializedPage {
@@ -81,6 +83,7 @@ export function serializeStroke(s: Stroke): SerializedStroke {
     out = Object.freeze({
       id: s.id, author: s.author, color: s.style.color, width: s.style.width, createdAt: s.createdAt,
       n: s.points.length / POINT_STRIDE, points: encodePoints(s.points),
+      ...(s.group ? { group: s.group } : {}),
     })
     encoded.set(s, out)
   }
@@ -132,7 +135,8 @@ export function parseStroke(data: unknown, where = 'Stroke'): { ok: true; stroke
   let points: Float32Array
   try { points = decodePoints(s.points, s.n) }
   catch (error) { return { ok: false, message: `${where}: ${error instanceof Error ? error.message : String(error)}.` } }
-  return { ok: true, stroke: createStroke({ id: s.id, author: s.author as Author, style: { color: s.color, width: s.width }, createdAt: s.createdAt, points }) }
+  if (s.group !== undefined && (typeof s.group !== 'string' || !STROKE_ID.test(s.group))) return bad('has an invalid group.')
+  return { ok: true, stroke: createStroke({ id: s.id, author: s.author as Author, style: { color: s.color, width: s.width }, createdAt: s.createdAt, points, group: s.group }) }
 }
 
 export const STROKE_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -156,6 +160,7 @@ export interface SerializedImage {
   w: number
   h: number
   angle?: number
+  group?: string
 }
 export type SerializedItem = SerializedStroke | SerializedImage
 
@@ -169,6 +174,7 @@ export function serializeImage(i: ImageItem): SerializedImage {
       id: i.id, kind: 'image' as const, author: i.author, createdAt: i.createdAt, image: i.image,
       x: round2(i.x), y: round2(i.y), w: round2(i.w), h: round2(i.h),
       ...(i.angle ? { angle: round2(i.angle) } : {}),
+      ...(i.group ? { group: i.group } : {}),
     })
     encodedImages.set(i, out)
   }
@@ -199,7 +205,8 @@ export function parseImage(data: unknown, where = 'Image'): { ok: true; image: I
       angle = legacy
       if (legacy % 180 !== 0) { const cx = x + w / 2, cy = y + h / 2; [w, h] = [h, w]; x = cx - w / 2; y = cy - h / 2 }
     }
-    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x, y, w, h, angle }) }
+    if (s.group !== undefined && (typeof s.group !== 'string' || !STROKE_ID.test(s.group))) return bad('has an invalid group.')
+    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x, y, w, h, angle, group: s.group }) }
   } catch (error) {
     return bad(`has an invalid position or size (${error instanceof Error ? error.message : String(error)}).`)
   }

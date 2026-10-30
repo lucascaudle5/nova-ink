@@ -1,5 +1,6 @@
 import type { InkDocument, Placed, PlacedImage } from './document'
-import type { ImageItem, Stroke } from './types'
+import { isImage } from './types'
+import type { ImageItem, PageItem, Stroke } from './types'
 
 type Command =
   | { kind: 'add'; strokes: Stroke[] }
@@ -108,6 +109,27 @@ export class History {
     if (strokes.length) { this.doc.addMany(strokes); commands.push({ kind: 'add', strokes: [...strokes] }) }
     for (const after of images) { this.doc.addImage(after); commands.push({ kind: 'image', before: null, after }) }
     this.recordAll(commands)
+  }
+
+  /**
+   * Applies a planned batch (see ops.ts) as ONE undo step: replacements keep their place in the stacking order,
+   * removals are undoable, additions go on top. Unknown ids are skipped. Returns how many changes were made.
+   */
+  applyPlan(plan: { adds: readonly PageItem[]; removes: readonly string[]; replaces: ReadonlyArray<readonly [string, PageItem]> }): number {
+    const own = !this.group
+    if (own) this.beginGroup()
+    let changed = 0
+    changed += this.replaceItems(
+      plan.replaces.filter((r): r is readonly [string, Stroke] => !isImage(r[1])),
+      plan.replaces.filter((r): r is readonly [string, ImageItem] => isImage(r[1])),
+    )
+    const imageIds = plan.removes.filter(id => !!this.doc.getImage(id))
+    changed += this.deleteItems(plan.removes.filter(id => this.doc.has(id)), imageIds)
+    const adds = plan.adds
+    this.addItems(adds.filter((i): i is Stroke => !isImage(i)), adds.filter(isImage))
+    changed += adds.length
+    if (own) this.endGroup()
+    return changed
   }
 
   private recordAll(commands: Command[]) {
