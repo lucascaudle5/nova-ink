@@ -7,7 +7,8 @@ export const MAX_POINTS_PER_STROKE = 100_000
 /** Random id that also works outside secure contexts (crypto.randomUUID needs HTTPS; iPad-on-LAN testing is HTTP). */
 export function newId(): string {
   const bytes = new Uint8Array(16)
-  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes)
+  const crypto = (globalThis as { crypto?: { getRandomValues(array: Uint8Array): Uint8Array } }).crypto
+  if (crypto?.getRandomValues) crypto.getRandomValues(bytes)
   else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
 }

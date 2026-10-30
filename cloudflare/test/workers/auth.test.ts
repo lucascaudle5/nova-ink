@@ -7,6 +7,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:
 import { SignJWT, exportJWK, generateKeyPair } from 'jose'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '../../src/app'
+import { TLDRAW_TEST_APP } from '../../src/index'
 import type { Snapshot } from '../../src/protocol'
 import small from '../fixtures/small.json'
 import s100 from '../fixtures/s100.json'
@@ -55,7 +56,7 @@ async function fakeAccessFetch(url: string, init?: RequestInit): Promise<Respons
   return new Response('unexpected fetch', { status: 599 })
 }
 
-const app = createApp({ fetch: fakeAccessFetch })
+const app = createApp({ fetch: fakeAccessFetch }, TLDRAW_TEST_APP)
 
 function goodEnv(overrides: Record<string, unknown> = {}) {
   return {

@@ -4,6 +4,7 @@ dist
 test/fixtures/*.json
 .tmp
 src/widget.generated.ts
+src/engine/widget.generated.ts
 .dev.vars
 .dev.vars.*
 .env

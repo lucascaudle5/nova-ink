@@ -107,25 +107,34 @@ export function parsePage(data: unknown): ParseResult {
   const out: Stroke[] = []
   const ids = new Set<string>()
   for (let i = 0; i < strokes.length; i++) {
-    const s = strokes[i] as Partial<SerializedStroke> | null
-    const where = `Stroke ${i + 1}`
-    if (!s || typeof s !== 'object') return invalid(`${where} is not an object.`)
-    if (typeof s.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(s.id)) return invalid(`${where} has an invalid id.`)
-    if (ids.has(s.id)) return invalid(`${where} repeats id ${s.id}.`)
-    if (!AUTHORS.includes(s.author as Author)) return invalid(`${where} has an unknown author.`)
-    if (typeof s.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.color)) return invalid(`${where} has an invalid color.`)
-    if (typeof s.width !== 'number' || !Number.isFinite(s.width) || s.width < 0.1 || s.width > 200) return invalid(`${where} has an invalid width.`)
-    if (typeof s.createdAt !== 'number' || !Number.isFinite(s.createdAt)) return invalid(`${where} has an invalid time.`)
-    if (typeof s.n !== 'number' || !Number.isInteger(s.n) || s.n < 1 || s.n > MAX_POINTS_PER_STROKE) return invalid(`${where} has an invalid point count.`)
-    if (typeof s.points !== 'string') return invalid(`${where} has no point data.`)
-    let points: Float32Array
-    try { points = decodePoints(s.points, s.n) }
-    catch (error) { return invalid(`${where}: ${error instanceof Error ? error.message : String(error)}.`) }
-    ids.add(s.id)
-    out.push(createStroke({ id: s.id, author: s.author as Author, style: { color: s.color, width: s.width }, createdAt: s.createdAt, points }))
+    const parsed = parseStroke(strokes[i], `Stroke ${i + 1}`)
+    if (!parsed.ok) return invalid(parsed.message)
+    if (ids.has(parsed.stroke.id)) return invalid(`Stroke ${i + 1} repeats id ${parsed.stroke.id}.`)
+    ids.add(parsed.stroke.id)
+    out.push(parsed.stroke)
   }
   return { ok: true, strokes: out, paper: paper ? { color: paper.color, pattern: paper.pattern } : { ...DEFAULT_PAPER } }
 }
+
+/** Validates and decodes one serialized stroke (as stored per row by a server). `where` prefixes the message. */
+export function parseStroke(data: unknown, where = 'Stroke'): { ok: true; stroke: Stroke } | { ok: false; message: string } {
+  const s = data as Partial<SerializedStroke> | null
+  const bad = (problem: string) => ({ ok: false as const, message: `${where} ${problem}` })
+  if (!s || typeof s !== 'object') return bad('is not an object.')
+  if (typeof s.id !== 'string' || !STROKE_ID.test(s.id)) return bad('has an invalid id.')
+  if (!AUTHORS.includes(s.author as Author)) return bad('has an unknown author.')
+  if (typeof s.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.color)) return bad('has an invalid color.')
+  if (typeof s.width !== 'number' || !Number.isFinite(s.width) || s.width < 0.1 || s.width > 200) return bad('has an invalid width.')
+  if (typeof s.createdAt !== 'number' || !Number.isFinite(s.createdAt)) return bad('has an invalid time.')
+  if (typeof s.n !== 'number' || !Number.isInteger(s.n) || s.n < 1 || s.n > MAX_POINTS_PER_STROKE) return bad('has an invalid point count.')
+  if (typeof s.points !== 'string') return bad('has no point data.')
+  let points: Float32Array
+  try { points = decodePoints(s.points, s.n) }
+  catch (error) { return { ok: false, message: `${where}: ${error instanceof Error ? error.message : String(error)}.` } }
+  return { ok: true, stroke: createStroke({ id: s.id, author: s.author as Author, style: { color: s.color, width: s.width }, createdAt: s.createdAt, points }) }
+}
+
+export const STROKE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 function invalid(message: string): ParseResult {
   return { ok: false, code: 'INVALID', message: `${message} Nothing was loaded.` }

@@ -12,16 +12,37 @@ import {
   AuthorizationError, CimdFetchError, OAuthProvider, authorizationErrorRedirect, insufficientScope,
   type ConsentDescription, type OAuthResourceAuth,
 } from '@cloudflare/workers-oauth-provider'
-import { createMcpHandler } from '@modelcontextprotocol/server'
+import { createMcpHandler, type McpServer } from '@modelcontextprotocol/server'
 import { AccessError, accessAuthorizeUrl, exchangeAndVerify, randomToken, userIdFor, type FetchLike } from './access'
-import { readConfig, type AppConfig, type AppEnv } from './config'
-import { createNovaServer } from './mcp'
+import { readConfig, type AppConfig, type BaseEnv } from './config'
 
 export const SCOPES = ['mcp:read', 'mcp:write', 'offline_access']
 /** A save can carry a 12 MiB snapshot plus the JSON-RPC envelope. */
 export const MAX_MCP_BODY_BYTES = 16 * 1024 * 1024
 
 export type AppDeps = { fetch: FetchLike }
+type Env = BaseEnv & Record<string, unknown>
+
+export type ServerContext = {
+  env: any
+  userId: string
+  scopes: string[]
+  waitUntil: (promise: Promise<unknown>) => void
+  /** Content-Length of the MCP request, for the payload-size log line. */
+  bytesIn: number | null
+}
+
+/** What differs between the Workers that share this sign-in layer. */
+export type AppOptions = {
+  /** Reported by /health. */
+  app: string
+  /** Storage bindings that must exist, or the Worker fails closed. */
+  bindings: readonly string[]
+  /** Shown on the consent page: "... wants to connect to <notebookLabel>." */
+  notebookLabel: string
+  homeTitle: string
+  createServer: (ctx: ServerContext) => McpServer
+}
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
@@ -32,12 +53,12 @@ const page = (title: string, body: string, status = 200, headers?: Headers) => {
   return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><body style="font-family:system-ui,sans-serif;max-width:34rem;margin:2rem auto;padding:0 1rem"><h1>${escapeHtml(title)}</h1>${body}`, { status, headers: out })
 }
 
-function consentPage(details: ConsentDescription, handle: string): string {
+function consentPage(details: ConsentDescription, handle: string, label: string): string {
   const origin = details.clientDomain
     ? `Published by <strong>${escapeHtml(details.clientDomain)}</strong>.`
     : 'This app registered itself; its name is not verified.'
   const scopes = SCOPES.map(s => `<label><input type="checkbox" name="scope" value="${escapeHtml(s)}" checked ${s === 'mcp:read' ? 'disabled' : ''}> ${escapeHtml(s)}</label>`).join('<br>')
-  return `<p><strong>${escapeHtml(details.clientName)}</strong> wants to connect to your private NOVA Ink test notebook. ${origin}</p>
+  return `<p><strong>${escapeHtml(details.clientName)}</strong> wants to connect to ${escapeHtml(label)}. ${origin}</p>
 <p>Access will be sent to <strong>${escapeHtml(details.redirectHost)}</strong>.${details.redirectIsLoopback ? ' <strong>That is an app on this computer.</strong>' : ''}</p>
 <p>Next you will sign in with Cloudflare Access. Only the owner's email can finish.</p>
 <form method="post">
@@ -57,22 +78,24 @@ function authorizationFailure(error: unknown): Response {
   throw error
 }
 
-export function createApp(deps: AppDeps = { fetch: (input, init) => fetch(input, init) }) {
-  const providers = new Map<string, OAuthProvider<AppEnv>>()
+export function createApp(given: AppDeps | undefined, options: AppOptions) {
+  const deps: AppDeps = given ?? { fetch: (input, init) => fetch(input, init) }
+  const providers = new Map<string, OAuthProvider<Env>>()
+  const configOf = (env: Env) => readConfig(env, options.bindings)
 
   // ---- /authorize and /callback (the OAuth provider's defaultHandler) ----------------------------------
 
-  async function authorizeGet(request: Request, env: AppEnv): Promise<Response> {
+  async function authorizeGet(request: Request, env: Env): Promise<Response> {
     const oauth = env.OAUTH_PROVIDER
     try {
       const authRequest = await oauth.parseAuthRequest(request)
       const details = await oauth.describeConsent(authRequest)
       const consent = await oauth.beginConsent(authRequest)
-      return page('Connect NOVA Ink', consentPage(details, consent.handle), 200, consent.headers)
+      return page('Connect NOVA Ink', consentPage(details, consent.handle, options.notebookLabel), 200, consent.headers)
     } catch (error) { return authorizationFailure(error) }
   }
 
-  async function authorizePost(request: Request, env: AppEnv, config: AppConfig): Promise<Response> {
+  async function authorizePost(request: Request, env: Env, config: AppConfig): Promise<Response> {
     const oauth = env.OAUTH_PROVIDER
     try {
       const form = await request.formData()
@@ -92,7 +115,7 @@ export function createApp(deps: AppDeps = { fetch: (input, init) => fetch(input,
     } catch (error) { return authorizationFailure(error) }
   }
 
-  async function callback(request: Request, env: AppEnv, config: AppConfig): Promise<Response> {
+  async function callback(request: Request, env: Env, config: AppConfig): Promise<Response> {
     const oauth = env.OAUTH_PROVIDER
     let resumed
     try { resumed = await oauth.finishUpstream<{ verifier?: unknown; nonce?: unknown }>(request) } catch (error) { return authorizationFailure(error) }
@@ -119,20 +142,20 @@ export function createApp(deps: AppDeps = { fetch: (input, init) => fetch(input,
     return redirect(redirectTo)
   }
 
-  async function defaultHandler(request: Request, env: AppEnv): Promise<Response> {
-    const parsed = readConfig(env)
+  async function defaultHandler(request: Request, env: Env): Promise<Response> {
+    const parsed = configOf(env)
     if (!parsed.ok) return notConfigured()
     const { pathname } = new URL(request.url)
     if (pathname === '/authorize' && request.method === 'GET') return authorizeGet(request, env)
     if (pathname === '/authorize' && request.method === 'POST') return authorizePost(request, env, parsed.config)
     if (pathname === '/callback' && request.method === 'GET') return callback(request, env, parsed.config)
-    if (pathname === '/') return page('NOVA Ink test Worker', '<p>Private test deployment. Nothing to see here.</p>')
+    if (pathname === '/') return page(options.homeTitle, '<p>Private deployment. Nothing to see here.</p>')
     return json({ ok: false, code: 'NOT_FOUND', message: 'Unknown route' }, 404)
   }
 
   // ---- /mcp (only reached with a valid access token for this resource) ----------------------------------
 
-  async function mcp(request: Request, env: AppEnv, ctx: ExecutionContext & { props?: unknown; auth?: OAuthResourceAuth }): Promise<Response> {
+  async function mcp(request: Request, env: Env, ctx: ExecutionContext & { props?: unknown; auth?: OAuthResourceAuth }): Promise<Response> {
     const auth = ctx.auth
     const props = ctx.props as { userId?: unknown } | undefined
     if (!auth || typeof props?.userId !== 'string' || !/^[0-9a-f]{32}$/.test(props.userId)) return json({ ok: false, code: 'UNAUTHORIZED', message: 'No valid identity.' }, 401)
@@ -141,19 +164,19 @@ export function createApp(deps: AppDeps = { fetch: (input, init) => fetch(input,
     const userId = props.userId
     const scopes = [...auth.scope]
     const handler = createMcpHandler(
-      () => createNovaServer({ env, userId, scopes, waitUntil: p => ctx.waitUntil(p), bytesIn: Number.isFinite(length) && length > 0 ? length : null }),
+      () => options.createServer({ env, userId, scopes, waitUntil: p => ctx.waitUntil(p), bytesIn: Number.isFinite(length) && length > 0 ? length : null }),
       { maxRequestBodySize: MAX_MCP_BODY_BYTES },
     )
     return handler.fetch(request, { authInfo: { token: '', clientId: auth.clientId ?? '', scopes, ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}) } })
   }
 
-  function providerFor(config: AppConfig): OAuthProvider<AppEnv> {
+  function providerFor(config: AppConfig): OAuthProvider<Env> {
     let provider = providers.get(config.origin)
     if (!provider) {
-      provider = new OAuthProvider<AppEnv>({
+      provider = new OAuthProvider<Env>({
         apiRoute: '/mcp',
-        apiHandler: { fetch: (request, env, ctx) => mcp(request, env as AppEnv, ctx as never) },
-        defaultHandler: { fetch: (request, env) => defaultHandler(request, env as AppEnv) },
+        apiHandler: { fetch: (request, env, ctx) => mcp(request, env as Env, ctx as never) },
+        defaultHandler: { fetch: (request, env) => defaultHandler(request, env as Env) },
         authorizeEndpoint: '/authorize',
         tokenEndpoint: '/oauth/token',
         clientRegistrationEndpoint: '/oauth/register',
@@ -170,11 +193,11 @@ export function createApp(deps: AppDeps = { fetch: (input, init) => fetch(input,
   const notConfigured = () => json({ ok: false, code: 'NOT_CONFIGURED', message: 'This Worker is not configured. Nothing is served.' }, 503)
 
   return {
-    async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const url = new URL(request.url)
-      const parsed = readConfig(env)
+      const parsed = configOf(env)
       // Only non-sensitive fact available without configuration: whether it is configured.
-      if (url.pathname === '/health' && request.method === 'GET') return json({ ok: true, app: 'nova-ink-cf-test', configured: parsed.ok })
+      if (url.pathname === '/health' && request.method === 'GET') return json({ ok: true, app: options.app, configured: parsed.ok })
       if (!parsed.ok) return notConfigured()
       // Serve only on the pinned origin (blocks stray hostnames and issuer confusion).
       if (url.origin !== parsed.config.origin) return json({ ok: false, code: 'WRONG_HOST', message: 'Unexpected host.' }, 421)

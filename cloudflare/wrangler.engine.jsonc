@@ -1,0 +1,21 @@
+{
+  // NOVA Ink engine notebook. Deploy only with the user's go-ahead: `npx wrangler deploy -c wrangler.engine.jsonc`.
+  "name": "nova-ink-engine",
+  "main": "src/engine/index.ts",
+  "compatibility_date": "2026-08-15",
+  // global_fetch_strictly_public: required by the OAuth provider for Client ID Metadata Document clients (ChatGPT).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": { "bindings": [
+    { "name": "PAGE", "class_name": "PageDO" },
+    { "name": "ENGINE_LIBRARY", "class_name": "NotebookLibraryDO" }
+  ] },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PageDO", "NotebookLibraryDO"] }
+  ],
+  // OAUTH_KV: created at deploy time with `npx wrangler kv namespace create OAUTH_KV_ENGINE`; its id goes here (not a secret).
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
+  // Not a secret. Empty until the first deploy tells us the workers.dev URL; while empty the Worker fails closed.
+  "vars": { "PUBLIC_ORIGIN": "" }
+}

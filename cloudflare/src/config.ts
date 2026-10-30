@@ -5,15 +5,19 @@
  * Secrets (wrangler secret put): ACCESS_CLIENT_ID, ACCESS_CLIENT_SECRET, ACCESS_TOKEN_URL, ACCESS_AUTHORIZATION_URL,
  *   ACCESS_JWKS_URL, ALLOWED_EMAIL
  * Plain var (wrangler.jsonc, not secret): PUBLIC_ORIGIN, e.g. https://nova-ink-test.<subdomain>.workers.dev
- * Bindings: OAUTH_KV, CANVAS, LIBRARY
+ * Bindings: OAUTH_KV plus the app's storage bindings (tldraw test: CANVAS, LIBRARY; engine: PAGE, ENGINE_LIBRARY)
  */
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider'
 import type { CanvasDO } from './canvas-do'
 import type { LibraryDO } from './library-do'
 
-export interface AppEnv {
+export interface AppEnv extends BaseEnv {
   CANVAS: DurableObjectNamespace<CanvasDO>
   LIBRARY: DurableObjectNamespace<LibraryDO>
+}
+
+/** What the sign-in layer needs, whichever storage bindings the app has. */
+export interface BaseEnv {
   OAUTH_KV: KVNamespace
   /** Injected by OAuthProvider into the env its handlers receive. */
   OAUTH_PROVIDER: OAuthHelpers
@@ -47,8 +51,8 @@ function parseUrl(value: string | null): URL | null {
   try { return new URL(value) } catch { return null }
 }
 
-export function readConfig(env: Partial<AppEnv>): { ok: true; config: AppConfig } | { ok: false } {
-  if (!env.OAUTH_KV || !env.CANVAS || !env.LIBRARY) return { ok: false }
+export function readConfig(env: Partial<BaseEnv>, bindings: readonly string[] = ['CANVAS', 'LIBRARY']): { ok: true; config: AppConfig } | { ok: false } {
+  if (!env.OAUTH_KV || bindings.some(name => !(env as Record<string, unknown>)[name])) return { ok: false }
   const origin = parseUrl(text(env.PUBLIC_ORIGIN))
   const clientId = text(env.ACCESS_CLIENT_ID)
   const clientSecret = text(env.ACCESS_CLIENT_SECRET)
