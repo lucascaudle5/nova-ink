@@ -159,14 +159,22 @@ Engine storage decisions (user, October 29, 2026, 8:40 PM); plan in ENGINE_ARCHI
 - A notebook holds several pages from the start. Each page is its own infinite canvas (OneNote-style tabs), not a fixed-size sheet.
 - Paper style is per page; a new page copies the previous page's style.
 - Build next: store and server tools for the engine plugin, then the ChatGPT plugin. Changing the plugin or tunnel setup still needs the user's confirmation at that step.
-- Not built yet.
+- Step 1 built: `NotebookStore` takes an optional `snapshots` check (default `TLDRAW_SNAPSHOTS`, today's behaviour). Root suite 77/77 including a new test, `tsc` clean, `build:host-test` passes. Steps 2–6 not built.
+
+Engine storage change (user, October 29, 2026, 8:50 PM): build engine storage on Cloudflare directly instead of the Windows PC folder above. The plan is rewritten in ENGINE_ARCHITECTURE.md "Engine storage plan: Cloudflare" (delta saves of strokes, one Library object plus one object per page, reused sign-in code, build steps 1–7; steps 1–5 are local only). The `NotebookStore` step 1 change was reverted before commit because the Cloudflare plan does not use it; `storage.mjs` is unchanged from v0.2.3. The user chose this knowing the sign-in refresh check (CF_TEST_DEPLOYMENT.md check 2) was never run; it must be run on the engine deployment. Deploying needs the user's go-ahead at that step.
+
+Cloudflare test deployment taken down (October 29, 2026, ~8:55 PM, user's decision):
+- The user ran `wrangler delete --name nova-ink-test` and the KV namespace delete; the terminal reported both succeeded.
+- Verified afterwards by me with wrangler: the account is Ai.nova.personal@gmail.com's; `deployments list --name nova-ink-test` returns "This Worker does not exist" (code 10007); `kv namespace list` returns `[]`.
+- I deleted the `nova-ink-test` Access for SaaS app in the Zero Trust dashboard on the user's request (confirmed gone from the Applications list).
+- Kept: the account, Zero Trust team `nova-dev`, the "NOVA Owner" policy, the `workers.dev` subdomain. Also still present and untouched: an Access app named "New SaaS application" on team domain `dark-tooth-ec30`, with no policy; its origin is unknown.
 
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
 2. (Decided above: engine storage plan.)
 3. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
 4. The engine plugin in ChatGPT: a separate dev-only MCP server/connector changes the plugin/tunnel setup; confirm before it is set up.
-5. When to take down the Cloudflare test deployment (still running, see cloudflare/docs/CF_TEST_DEPLOYMENT.md).
+5. (Decided: the Cloudflare test deployment was taken down October 29, 2026, see above.)
 
 Next engine milestone (bounded): (a) the user tries the partial eraser, undo (buttons and finger taps), zoom bar and paper styles on the iPad, and runs Benchmark pan zoomed out with +3,000 strokes, then exports Results; (b) record the numbers here; (c) if undo is still wrong, reproduce it from the user's description; (d) then stroke-relative coordinates for the infinite canvas.
 

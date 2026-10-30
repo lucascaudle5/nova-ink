@@ -110,21 +110,42 @@ Submit time is small; the cost is GPU/compositor rasterization of thousands of f
 
 1. **Now (done):** engine in `engine/` on `engine/spike`, in its own worktree (`..\nova-ink-engine`). The v0.2.3 checkout, its tests, server, tunnel and data are untouched. A self-contained package (like `cloudflare/`) keeps the engine independently testable while staying in the same repo for later integration; a separate repository would make the eventual `EditorPort` integration and shared tests harder.
 2. **Device spike:** measure the harness on iPad Safari, then inside ChatGPT next to tldraw. Zoomed-out pan (criterion 4b) has a fix that passes on desktop; re-measure on iPad.
-3. **Engine plugin:** `EngineEditorPort` + its own page store (planned first), served as a separate ChatGPT plugin. The tldraw plugin keeps working unchanged; the user tests each plugin separately.
+3. **Engine plugin:** its own notebook storage on Cloudflare (plan below), served as a separate ChatGPT app. The tldraw plugin keeps working unchanged; the user tests each plugin separately.
 4. **Parity on iPad, then switch.** No converter: the user decided old tldraw notes need no compatibility. Old data is left in place (not deleted) unless the user explicitly asks. tldraw is removed only after the engine plugin is accepted.
 
-### Engine storage plan (user decisions October 29, 2026; not built)
+### Engine storage plan: Cloudflare (user decision October 29, 2026, 8:50 PM; not built)
 
-- **Separate folder:** `%LOCALAPPDATA%\NOVA-Ink\engine-data` (override `NOVA_INK_ENGINE_DATA_DIR`). The tldraw data folder is never read or written by the engine plugin.
-- **Reuse `NotebookStore`** (`storage.mjs`) for its proven guarantees: atomic writes, revision conflicts, one editing lease per canvas, 10 backups, manifest recovery, quarantine instead of deletion. Its only tldraw-specific part is the snapshot shape check; it becomes a constructor option with today's check as the default, so the tldraw plugin behaves exactly as before (its tests must stay green).
-- **One store canvas = one page.** A page snapshot is `{ document: <nova-ink page, including paper>, session: { camera } }`, validated with `parsePage` (refuse rather than guess). Per-page saves keep each write small and leases per page; the 12 MiB limit applies per page. Camera-only saves do not push out backups (existing behaviour, since only `document` is compared).
-- **Notebook index** (`notebooks.json` next to the page store, atomic writes plus a backup copy, its own revision for conflict protection): notebooks with names and ordered page ids, and the last opened notebook/page. Removing a page moves it to a recoverable trash list; nothing is deleted. Pages found in the store but in no notebook appear in a "Recovered pages" notebook instead of vanishing.
-- **New page** copies the previous page's paper; each page then keeps its own.
-- **Saved** only after the server confirms the write; on failure **Not synced** with the local copy kept (unchanged product rule).
-- **Server:** a separate engine MCP server process outside `engine/` (the engine stays free of server code), bound to 127.0.0.1. Tools mirror today's (list, open with lease, save with expected revision, create, rename) plus page add/rename/reorder/remove. Session tests run it in memory with temporary directories.
-- **Backups:** `npm run backup`/`restore` cover the engine folder too.
-- **Later:** images and PDFs as content-addressed files referenced from pages; delta saves only if full-page saves prove slow over the tunnel (3,000 strokes ≈ 2.2 MB).
-- **Build order:** (1) pluggable snapshot check in `NotebookStore`; (2) engine page snapshot validator; (3) notebook index with tests; (4) engine MCP server and session tests; (5) connect it to ChatGPT as a second plugin after the user confirms the plugin/tunnel change; (6) backup/restore coverage.
+Supersedes the earlier Windows-folder plan (same day, 8:40 PM). Kept from it: notebooks hold several pages; each page is its own infinite canvas; paper is per page and a new page copies the previous page's paper; engine data is fully separate from tldraw data, which is never read, migrated or deleted.
+
+Why Cloudflare suits the engine better than it suited tldraw: strokes never change once drawn, so a save only has to send the strokes added and the ids removed. The tldraw test shipped the whole canvas on every save (1.90 MiB at 1,500 strokes) and was over the documented free-plan CPU figure on every widget call; small delta saves are the main answer to that risk.
+
+**Shape**
+- A new Worker, `nova-ink-engine`, separate from anything tldraw. Its code lives in `cloudflare/` next to the old spike (second wrangler config and entry point) so it reuses the tested sign-in code: OAuth provider for ChatGPT, Cloudflare Access login with only the allowed email, fail closed when any secret is missing (`app.ts`, `access.ts`, `config.ts` and their 36 tests). It imports the engine's format code from `engine/`; `engine/` never imports anything back.
+- **Library object** (one per user, `library:<userId>`): notebooks (id, name, order, deleted_at) and pages (id, notebook, title, fractional order key, paper, deleted_at). Removing a page or notebook sets deleted_at (trash, restorable); nothing is destroyed at delete time. A page object that exists but is in no notebook shows up in "Recovered pages". Every page id is checked against the caller's library (`NOT_FOUND` otherwise), as in the spike.
+- **Page object** (one per page, SQLite, `WITHOUT ROWID` tables): `strokes` (id, order key, serialized stroke as in the `nova-ink` v1 format); `head` (format version, revision, saveId, savedBy, savedAt, stroke count); `meta` (paper, camera); lease; gzip checkpoints. A format version newer than the code is refused (`FORMAT_NEWER`), like today.
+
+**Save protocol** (same order of checks as `storage.mjs` and the spike's `CanvasDO`)
+- Request: `{ clientId, saveId, baseRevision, adds: [{ stroke, order }], removes: [id], paper?, camera? }`. A partial erase is removes plus adds in one save, so it is atomic.
+- Checks: replay of the same saveId returns ok and writes nothing; another client's live lease returns `LEASE_HELD`; a stale baseRevision returns `CONFLICT` (with `ownLastSaveId` so a lost acknowledgement is not mistaken for a conflict); every added stroke is validated with the engine's parser (refuse, don't guess); then one transaction writes the rows and the new head.
+- Cost: about one row per added or removed stroke plus the head. Erasing through three strokes is roughly 10 rows. The free plan allows 100,000 row writes a day; that is tens of thousands of saves.
+- **Saved** only after this acknowledgement; on failure the widget shows **Not synced** and keeps the unsent changes in memory to retry (unchanged product rule). Lease 45 s with 15 s heartbeats, stored only when the holder changes.
+- Open returns the whole page (3,000 strokes ≈ 2.2 MB) assembled from rows. If opening large pages proves too expensive in CPU, load in pages of rows.
+- Checkpoints: the whole page gzipped, at most one per 10 minutes and only when strokes changed, newest 10 kept; restore creates a new revision. Retention by day and week, and an off-site copy in R2, are later options.
+
+**Tools** (ChatGPT app, `ui://nova-ink-engine/notebook`): list notebooks; create/rename/remove/restore a notebook; add/rename/reorder/remove/restore a page; open a page (takes the lease); save; heartbeat; release; list and restore checkpoints. Save, heartbeat and release are widget-only. No tool lets the model draw on a page (AI annotations stay a separate, explicit feature).
+
+**Your data on your PC**: an export script that downloads every notebook to local `nova-ink` files, so notes do not exist only in Cloudflare. Run it by hand at first; exact sign-in mechanism to be settled when built.
+
+**Open risks, checked only after deploying**: ChatGPT staying signed in after an hour and the next day (never run on the old test); free-plan CPU on open of a large page; latency from the iPad; whether the ChatGPT widget can keep a local draft (IndexedDB) for crash recovery.
+
+**Build order** (everything before step 6 is local, tested in workerd and Node, nothing deployed):
+1. Engine: helpers to serialize and validate a single stroke and to assemble a page from stroke rows, with tests (the existing page format stays unchanged).
+2. Page object: rows, delta save, replay/lease/conflict, checkpoints and restore, with workerd tests.
+3. Library object: notebooks, ordered pages, trash, recovered pages, paper copied to new pages, ownership checks, with tests.
+4. Engine Worker: sign-in reused, MCP tools and widget resource, end-to-end tests with fake Access.
+5. Widget: the harness drawing surface inside a ChatGPT app UI (outside `engine/`), with a save queue, Saved/Not synced, lease handling and page tabs; desktop-tested.
+6. **Needs the user's go-ahead:** deploy `nova-ink-engine`, add it in ChatGPT as a connector, run the sign-in, refresh, CPU and iPad checks.
+7. Export to the PC.
 
 ## 9. Known gaps (not built)
 

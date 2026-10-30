@@ -4,6 +4,10 @@ Purpose: answer the three go/no-go questions of `V0.3_STORAGE_AND_CLOUDFLARE.md`
 
 Worker name `nova-ink-test` on `workers.dev`. Delete it when done (section 6).
 
+## Taken down (Oct 29, 2026, ~8:55 PM)
+
+At the user's decision, before the refresh check (check 2) was run. Worker `nova-ink-test` (with its secrets and Durable Object data, all generated) and KV namespace `1fd7d147…` deleted; wrangler afterwards reports the Worker does not exist and no KV namespaces. The `nova-ink-test` Access for SaaS app was deleted in the dashboard. Account, team `nova-dev`, the "NOVA Owner" policy and the `workers.dev` subdomain remain. The section below is the record as it stood before the takedown.
+
 ## Where we stopped (Oct 29, 2026, 5:40 PM)
 
 - **Live on real Cloudflare:** `https://nova-ink-test.ai-nova-personal.workers.dev` (Worker, 2 Durable Objects, `OAUTH_KV`, Access SaaS OIDC app, six secrets set by the user). Left fully running by the user's choice. Only the allowed email can sign in; unconfigured it returns 503 everywhere except `/health`.
