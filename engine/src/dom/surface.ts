@@ -3,12 +3,14 @@ import { InkDocument } from '../core/document'
 import type { DocumentChange } from '../core/document'
 import { eraseFromStroke, strokesHitBy } from '../core/eraser'
 import { History } from '../core/history'
+import { createImage, dragRect, fitSize, imageAt, placeImage } from '../core/image'
+import type { Rect } from '../core/image'
 import { InputController } from '../core/input'
 import type { PointerInput, PointerKind, Tool } from '../core/input'
 import { Samples } from '../core/metrics'
 import type { Paper } from '../core/paper'
 import { createStroke } from '../core/stroke'
-import type { Camera, Stroke, StrokeStyle } from '../core/types'
+import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
 import { CanvasRenderer, createPath2D } from '../render/renderer'
 
 export interface SurfaceMetrics {
@@ -60,6 +62,9 @@ const MIN_SCALE = 0.5
 const MAX_SCALE = 2.5
 const REFRESH_MS = 200
 const WHEEL_IDLE_MS = 150
+/** Resize handle: drawn this size, and grabbed within this distance (CSS px), at every zoom. */
+const HANDLE_PX = 14
+const HANDLE_HIT_PX = 26
 
 interface Interaction { sources: Set<string>; snapshot: boolean; stale: boolean; refreshedAt: number }
 
@@ -102,13 +107,16 @@ export class InkSurface {
   private interaction: Interaction | null = null
   private wheelTimer: ReturnType<typeof setTimeout> | null = null
   private animation: { raf: number; target: Camera } | null = null
+  private imageSource: ((image: string) => CanvasImageSource | null) | null = null
+  private selected: string | null = null
+  private drag: { mode: 'move' | 'resize'; from: { x: number; y: number }; item: ImageItem; rect: Rect } | null = null
 
   constructor(private readonly container: HTMLElement) {
     container.classList.add('nova-ink-surface')
     Object.assign(container.style, { position: 'relative', overflow: 'hidden', touchAction: 'none', userSelect: 'none', webkitUserSelect: 'none' })
     container.style.setProperty('-webkit-touch-callout', 'none')
     const paper = this.makeCanvas(), base = this.makeCanvas(), live = this.makeCanvas()
-    this.renderer = new CanvasRenderer({ paper, base, live, snapshot: document.createElement('canvas') }, { createPath: createPath2D })
+    this.renderer = new CanvasRenderer({ paper, base, live, snapshot: document.createElement('canvas') }, { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null })
     this.input = new InputController({
       getCamera: () => this.camera,
       setCamera: camera => this.setCamera(camera),
@@ -137,6 +145,9 @@ export class InkSurface {
         this.schedule()
         this.notify()
       },
+      selectBegin: (p, screen) => this.selectBegin(p, screen),
+      selectMove: p => this.selectMove(p),
+      selectEnd: cancelled => this.selectEnd(cancelled),
       undo: () => this.undo(),
       redo: () => this.redo(),
     })
@@ -163,7 +174,84 @@ export class InkSurface {
   }
 
   get tool(): Tool { return this.input.tool }
-  setTool(tool: Tool): void { this.input.tool = tool; this.notify() }
+  setTool(tool: Tool): void {
+    this.input.tool = tool
+    if (tool !== 'select') this.select(null)
+    this.notify()
+  }
+
+  // ---- images ----
+
+  /** The decoded picture for a stored image name, or null while it is not available (a placeholder is drawn). */
+  setImageSource(source: (image: string) => CanvasImageSource | null): void { this.imageSource = source; this.invalidateScene() }
+  /** Call when pictures finish loading. */
+  imagesChanged(): void { this.invalidateScene() }
+
+  get selectedImage(): ImageItem | null { return (this.selected && this.doc.getImage(this.selected)) || null }
+
+  /** Places a stored picture of `w` x `h` pixels in the middle of the view (at most 60% of it) and selects it. */
+  insertImage(image: string, w: number, h: number): ImageItem | null {
+    if (this.readOnly) return null
+    const z = this.camera.z
+    const size = fitSize(w, h, (this.widthCss * 0.6) / z, (this.heightCss * 0.6) / z)
+    const cx = this.camera.x + this.widthCss / 2 / z, cy = this.camera.y + this.heightCss / 2 / z
+    const item = createImage({ image, x: cx - size.w / 2, y: cy - size.h / 2, w: size.w, h: size.h })
+    this.history.insertImage(item)
+    this.input.tool = 'select'
+    this.select(item.id)
+    return item
+  }
+
+  deleteSelectedImage(): boolean {
+    const id = this.selected
+    if (!id || this.readOnly) return false
+    const done = this.history.deleteImage(id)
+    this.select(null)
+    return done
+  }
+
+  private select(id: string | null) {
+    if (this.selected === id) return
+    this.selected = id
+    this.needsLive = true
+    this.schedule()
+    this.notify()
+  }
+
+  private selectBegin(p: { x: number; y: number }, screen: { x: number; y: number }) {
+    const current = this.selectedImage
+    if (current) {
+      const corner = toScreen(this.camera, current.x + current.w, current.y + current.h)
+      if (Math.hypot(screen.x - corner.x, screen.y - corner.y) <= HANDLE_HIT_PX) { this.drag = { mode: 'resize', from: p, item: current, rect: current }; return }
+    }
+    const hit = imageAt(this.doc.images, p.x, p.y)
+    this.select(hit?.id ?? null)
+    this.drag = hit ? { mode: 'move', from: p, item: hit, rect: hit } : null
+  }
+
+  private selectMove(p: { x: number; y: number }) {
+    const drag = this.drag
+    if (!drag) return
+    drag.rect = dragRect(drag.item, drag.mode, drag.from, p)
+    this.invalidateScene()
+    this.needsLive = true
+  }
+
+  private selectEnd(cancelled: boolean) {
+    const drag = this.drag
+    this.drag = null
+    if (!drag) return
+    const r = drag.rect, i = drag.item
+    const moved = Math.abs(r.x - i.x) + Math.abs(r.y - i.y) + Math.abs(r.w - i.w) > 0.5 / this.camera.z
+    if (!cancelled && moved && this.doc.getImage(i.id)) {
+      const next = placeImage(i, r)
+      this.history.replaceImage(i.id, next)
+      this.selected = next.id
+    }
+    this.invalidateScene()
+    this.needsLive = true
+    this.notify()
+  }
 
   get eraserRadiusPx(): number { return this.input.eraserRadiusPx }
   set eraserRadiusPx(px: number) { this.input.eraserRadiusPx = px }
@@ -185,16 +273,20 @@ export class InkSurface {
   get readOnly(): boolean { return this.input.readOnly }
   set readOnly(value: boolean) {
     if (value && this.live) { this.live = null; this.needsLive = true; this.schedule() }
+    if (value) { this.drag = null; this.select(null) }
     this.input.readOnly = value
     this.notify()
   }
 
-  undo(): boolean { if (this.readOnly) return false; const done = this.history.undo(); this.notify(); return done }
-  redo(): boolean { if (this.readOnly) return false; const done = this.history.redo(); this.notify(); return done }
+  undo(): boolean { if (this.readOnly) return false; const done = this.history.undo(); this.dropStaleSelection(); this.notify(); return done }
+  redo(): boolean { if (this.readOnly) return false; const done = this.history.redo(); this.dropStaleSelection(); this.notify(); return done }
+  private dropStaleSelection() { if (this.selected && !this.doc.getImage(this.selected)) this.select(null) }
 
   /** Replaces the page contents. Not undoable. */
-  load(strokes: readonly Stroke[]): void {
-    this.doc.load(strokes)
+  load(strokes: readonly Stroke[], images: readonly ImageItem[] = []): void {
+    this.drag = null
+    this.selected = null
+    this.doc.load(strokes, images)
     this.history.clear()
     this.notify()
   }
@@ -209,6 +301,7 @@ export class InkSurface {
     this.camera = camera
     this.needsPaper = true
     this.needsScene = true
+    if (this.selected) this.needsLive = true
     this.schedule()
     this.notify()
   }
@@ -420,7 +513,8 @@ export class InkSurface {
   }
 
   private onDocumentChange(change: DocumentChange) {
-    const appended = !change.reset && !change.removed.length && change.added.every(p => p.index >= this.doc.size - change.added.length)
+    const appended = !change.reset && !change.images && !change.removed.length && change.added.every(p => p.index >= this.doc.size - change.added.length)
+    if (change.images) this.needsLive = true
     if (appended && !this.needsScene && !this.interaction) this.incremental.push(...change.added.map(p => p.stroke))
     else this.invalidateScene()
     this.schedule()
@@ -457,7 +551,8 @@ export class InkSurface {
       else if (this.eraser) {
         const p = toScreen(this.camera, this.eraser.x, this.eraser.y)
         this.renderer.drawEraser(p.x, p.y, this.eraser.r * this.camera.z)
-      } else this.renderer.clearLive()
+      } else if (this.drag || this.selectedImage) this.renderer.drawSelection(this.drag?.rect ?? this.selectedImage!, this.camera, HANDLE_PX)
+      else this.renderer.clearLive()
       this.needsLive = false
     }
     const ms = performance.now() - start
@@ -467,8 +562,14 @@ export class InkSurface {
   }
 
   private drawFullScene() {
-    const visible = this.doc.query(viewportBounds(this.camera, this.widthCss, this.heightCss))
-    const { ms } = this.renderer.drawScene(visible, this.camera)
+    const view = viewportBounds(this.camera, this.widthCss, this.heightCss)
+    const visible = this.doc.query(view)
+    const drag = this.drag
+    // While dragging, the placement is drawn where it is going; the document changes only on release.
+    const images = drag
+      ? this.doc.images.map(i => i.id === drag.item.id ? { ...i, ...drag.rect } : i)
+      : this.doc.queryImages(view)
+    const { ms } = this.renderer.drawScene(visible, this.camera, undefined, images)
     this.metrics.sceneMs.push(ms)
     this.lastSceneMs = ms
     this.lastDrawnCount = visible.length

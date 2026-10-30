@@ -1,31 +1,40 @@
 import { intersects } from './geometry'
-import type { Bounds, Stroke } from './types'
+import type { Bounds, ImageItem, Stroke } from './types'
 
 /** A stroke with its z-order position at the moment it was removed. */
 export interface Placed { stroke: Stroke; index: number }
+/** An image placement with its position in the image list at the moment it was removed. */
+export interface PlacedImage { image: ImageItem; index: number }
 
 export interface DocumentChange {
   added: Placed[]
   removed: Placed[]
   /** True when the change replaced the whole document (load). */
   reset: boolean
+  /** True when image placements changed (they are drawn under all ink). */
+  images?: boolean
 }
 
 /**
- * Ordered stroke list (array order is z-order). Plain data plus change events; knows nothing about
- * rendering, input, storage or hosts.
+ * Ordered stroke list (array order is z-order) plus image placements, which are always under the ink
+ * (their own order: later on top). Ids are unique across both. Plain data plus change events; knows
+ * nothing about rendering, input, storage or hosts.
  */
 export class InkDocument {
   private list: Stroke[] = []
   private byId = new Map<string, Stroke>()
+  private imageList: ImageItem[] = []
+  private imagesById = new Map<string, ImageItem>()
   private listeners = new Set<(change: DocumentChange) => void>()
   /** Increments on every change; useful for dirty tracking. */
   revision = 0
 
   get strokes(): readonly Stroke[] { return this.list }
+  get images(): readonly ImageItem[] { return this.imageList }
   get size(): number { return this.list.length }
   get(id: string): Stroke | undefined { return this.byId.get(id) }
   has(id: string): boolean { return this.byId.has(id) }
+  getImage(id: string): ImageItem | undefined { return this.imagesById.get(id) }
 
   onChange(listener: (change: DocumentChange) => void): () => void {
     this.listeners.add(listener)
@@ -92,16 +101,50 @@ export class InkDocument {
     this.emit({ added: sorted, removed: [], reset: false })
   }
 
+  // ---- image placements ----
+
+  /** Puts a placement on top of the other images (still under all ink), or at `index`. */
+  addImage(image: ImageItem, index = this.imageList.length): void {
+    this.assertNew([image])
+    this.imageList.splice(Math.min(index, this.imageList.length), 0, image)
+    this.imagesById.set(image.id, image)
+    this.emit({ added: [], removed: [], reset: false, images: true })
+  }
+
+  removeImage(id: string): PlacedImage | null {
+    const index = this.imageList.findIndex(i => i.id === id)
+    if (index < 0) return null
+    const [image] = this.imageList.splice(index, 1)
+    this.imagesById.delete(id)
+    this.emit({ added: [], removed: [], reset: false, images: true })
+    return { image, index }
+  }
+
+  /** Swaps a placement for `next` at the same position (move or resize). */
+  replaceImage(id: string, next: ImageItem): PlacedImage | null {
+    const index = this.imageList.findIndex(i => i.id === id)
+    if (index < 0) return null
+    this.assertNew([next])
+    const image = this.imageList[index]
+    this.imageList[index] = next
+    this.imagesById.delete(id)
+    this.imagesById.set(next.id, next)
+    this.emit({ added: [], removed: [], reset: false, images: true })
+    return { image, index }
+  }
+
   /** Replaces the whole document, e.g. after loading a saved notebook page. */
-  load(strokes: readonly Stroke[]): void {
+  load(strokes: readonly Stroke[], images: readonly ImageItem[] = []): void {
     const ids = new Set<string>()
-    for (const s of strokes) {
-      if (ids.has(s.id)) throw new Error(`Duplicate stroke id ${s.id}`)
-      ids.add(s.id)
+    for (const item of [...strokes, ...images]) {
+      if (ids.has(item.id)) throw new Error(`Duplicate stroke id ${item.id}`)
+      ids.add(item.id)
     }
     this.list = [...strokes]
     this.byId = new Map(this.list.map(s => [s.id, s]))
-    this.emit({ added: this.list.map((stroke, index) => ({ stroke, index })), removed: [], reset: true })
+    this.imageList = [...images]
+    this.imagesById = new Map(this.imageList.map(i => [i.id, i]))
+    this.emit({ added: this.list.map((stroke, index) => ({ stroke, index })), removed: [], reset: true, images: true })
   }
 
   /** Strokes whose bounds intersect `area`, in z-order. Linear scan; see docs for when to add a spatial index. */
@@ -111,20 +154,24 @@ export class InkDocument {
     return out
   }
 
+  queryImages(area: Bounds): ImageItem[] {
+    return this.imageList.filter(i => intersects(i.bounds, area))
+  }
+
   contentBounds(): Bounds | null {
-    if (!this.list.length) return null
+    if (!this.list.length && !this.imageList.length) return null
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const { bounds: b } of this.list) {
+    for (const { bounds: b } of [...this.list, ...this.imageList]) {
       minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY)
       maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY)
     }
     return { minX, minY, maxX, maxY }
   }
 
-  private assertNew(strokes: readonly Stroke[]) {
+  private assertNew(items: ReadonlyArray<{ id: string }>) {
     const seen = new Set<string>()
-    for (const s of strokes) {
-      if (this.byId.has(s.id) || seen.has(s.id)) throw new Error(`Duplicate stroke id ${s.id}`)
+    for (const s of items) {
+      if (this.byId.has(s.id) || this.imagesById.has(s.id) || seen.has(s.id)) throw new Error(`Duplicate stroke id ${s.id}`)
       seen.add(s.id)
     }
   }

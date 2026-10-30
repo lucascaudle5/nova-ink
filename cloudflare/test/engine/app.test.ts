@@ -31,7 +31,7 @@ describe('engine tools', () => {
     const { body } = await rpc(token, 'tools/list')
     const tools = body.result.tools as any[]
     expect(tools.map(t => t.name).sort()).toEqual([
-      'nb_add_page', 'nb_create_folder', 'nb_create_notebook', 'nb_heartbeat', 'nb_list', 'nb_list_checkpoints', 'nb_move_page', 'nb_open_page', 'nb_release',
+      'nb_add_page', 'nb_create_folder', 'nb_create_notebook', 'nb_get_image', 'nb_heartbeat', 'nb_list', 'nb_list_checkpoints', 'nb_move_page', 'nb_open_page', 'nb_put_image', 'nb_release',
       'nb_remove_folder', 'nb_remove_notebook', 'nb_remove_page', 'nb_rename_folder', 'nb_rename_notebook', 'nb_rename_page', 'nb_restore_checkpoint',
       'nb_restore_folder', 'nb_restore_notebook', 'nb_restore_page', 'nb_save_page', 'nb_update_notebook', 'open_nova_notebook',
     ])

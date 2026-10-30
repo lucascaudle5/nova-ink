@@ -21,6 +21,33 @@ const fail = (code: string, message: string): Result => ({ ok: false, code, mess
 const missing = () => fail('NOT_FOUND', 'That notebook, folder or page was not found.')
 const COLOR = /^#[0-9a-f]{6}$/
 
+/** Pictures are stored in pieces small enough for one tool call each. */
+export const IMAGE_CHUNK_BYTES = 192 * 1024
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_IMAGE_PIXELS_SIDE = 8192
+const IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp']
+const IMAGE_REF = /^[A-Za-z0-9_-]{1,64}$/
+type ImageRow = { id: string; mime: string; width: number; height: number; bytes: number; count: number; complete: number; created_at: string }
+
+function hasSignature(b: Uint8Array, mime: string): boolean {
+  const ascii = (from: number, text: string) => [...text].every((c, i) => b[from + i] === c.charCodeAt(0))
+  if (mime === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
+  if (mime === 'image/png') return b[0] === 0x89 && ascii(1, 'PNG')
+  return ascii(0, 'RIFF') && ascii(8, 'WEBP')
+}
+function fromBase64(text: unknown): Uint8Array {
+  if (typeof text !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) throw new Error('base64')
+  const raw = atob(text)
+  const out = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
+  return out
+}
+function toBase64(bytes: Uint8Array): string {
+  let raw = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) raw += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(raw)
+}
+
 type NotebookRow = { id: string; name: string; sort_key: string; created_at: string; updated_at: string; deleted_at: string | null; folder_id: string | null; color: string | null }
 type FolderRow = { id: string; name: string; sort_key: string; created_at: string; deleted_at: string | null }
 type PageRow = { id: string; notebook_id: string; title: string; sort_key: string; created_at: string; updated_at: string; revision: number; deleted_at: string | null }
@@ -43,6 +70,8 @@ export class NotebookLibraryDO extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS pages (id TEXT PRIMARY KEY, notebook_id TEXT NOT NULL, title TEXT NOT NULL, sort_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL, deleted_at TEXT) WITHOUT ROWID')
     this.sql.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID')
     this.sql.exec('CREATE TABLE IF NOT EXISTS folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_key TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT) WITHOUT ROWID')
+    this.sql.exec('CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, mime TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, bytes INTEGER NOT NULL, count INTEGER NOT NULL, complete INTEGER NOT NULL, created_at TEXT NOT NULL) WITHOUT ROWID')
+    this.sql.exec('CREATE TABLE IF NOT EXISTS image_chunks (id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, idx)) WITHOUT ROWID')
     // Added after the first deployment: nullable, so existing notebooks read as "no folder, default color".
     const columns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(notebooks)').toArray().map(c => c.name))
     if (!columns.has('folder_id')) this.sql.exec('ALTER TABLE notebooks ADD COLUMN folder_id TEXT')
@@ -259,6 +288,57 @@ export class NotebookLibraryDO extends DurableObject {
   }
 
   /** Records the latest revision (the "was this page ever saved" marker). Callers debounce. */
+  // ---- pictures (image placements on pages refer to these by id) ----
+
+  /**
+   * Stores one piece of a picture. Pieces may arrive in any order and be re-sent; the picture is usable
+   * once every piece is stored and the total matches. A complete picture is never changed.
+   */
+  putImageChunk(req: { imageId: string; mime: string; width: number; height: number; bytes: number; count: number; index: number; data: string }): Result {
+    const { imageId, mime, width, height, bytes, count, index } = req ?? ({} as never)
+    if (!IMAGE_REF.test(imageId ?? '')) return fail('INVALID_REQUEST', 'Invalid picture id.')
+    if (!IMAGE_MIME.includes(mime)) return fail('INVALID_IMAGE', 'Only JPEG, PNG and WebP pictures can be stored.')
+    if (![width, height, bytes, count, index].every(Number.isSafeInteger) || width < 1 || height < 1 || width > MAX_IMAGE_PIXELS_SIDE || height > MAX_IMAGE_PIXELS_SIDE
+      || bytes < 1 || bytes > MAX_IMAGE_BYTES || count < 1 || count !== Math.ceil(bytes / IMAGE_CHUNK_BYTES) || index < 0 || index >= count) return fail('INVALID_REQUEST', 'Invalid picture size or piece number.')
+    let chunk: Uint8Array
+    try { chunk = fromBase64(req.data) } catch { return fail('INVALID_REQUEST', 'The picture data is not valid base64.') }
+    const expected = index < count - 1 ? IMAGE_CHUNK_BYTES : bytes - IMAGE_CHUNK_BYTES * (count - 1)
+    if (chunk.length !== expected) return fail('INVALID_REQUEST', `Picture piece ${index + 1} has ${chunk.length} bytes; expected ${expected}.`)
+    if (index === 0 && !hasSignature(chunk, mime)) return fail('INVALID_IMAGE', 'The picture data does not match its type.')
+
+    const existing = this.imageRow(imageId)
+    if (existing && (existing.mime !== mime || existing.width !== width || existing.height !== height || existing.bytes !== bytes || existing.count !== count)) {
+      return fail('INVALID_REQUEST', 'This picture id is already used by a different picture.')
+    }
+    if (existing?.complete) return { ok: true, complete: true }
+    this.ctx.storage.transactionSync(() => {
+      if (!existing) this.sql.exec('INSERT INTO images (id, mime, width, height, bytes, count, complete, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)', imageId, mime, width, height, bytes, count, this.iso())
+      this.sql.exec('INSERT OR REPLACE INTO image_chunks (id, idx, data) VALUES (?, ?, ?)', imageId, index, chunk.buffer as ArrayBuffer)
+    })
+    const stored = this.sql.exec<{ n: number; total: number }>('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)), 0) AS total FROM image_chunks WHERE id = ?', imageId).one()
+    const complete = stored.n === count && stored.total === bytes
+    if (complete) this.sql.exec('UPDATE images SET complete = 1 WHERE id = ?', imageId)
+    return { ok: true, complete, stored: stored.n }
+  }
+
+  getImageChunk(req: { imageId: string; index: number }): Result {
+    const row = IMAGE_REF.test(req?.imageId ?? '') ? this.imageRow(req.imageId) : null
+    if (!row?.complete) return fail('NOT_FOUND', 'That picture was not found.')
+    if (!Number.isSafeInteger(req.index) || req.index < 0 || req.index >= row.count) return fail('INVALID_REQUEST', 'Invalid picture piece number.')
+    const chunk = this.sql.exec<{ data: ArrayBuffer }>('SELECT data FROM image_chunks WHERE id = ? AND idx = ?', row.id, req.index).toArray()[0]
+    if (!chunk) return fail('CORRUPT_RECORD', 'A piece of this picture is missing.')
+    return { ok: true, mime: row.mime, width: row.width, height: row.height, bytes: row.bytes, count: row.count, index: req.index, data: toBase64(new Uint8Array(chunk.data)) }
+  }
+
+  /** Ids among `ids` that are not complete pictures of this library. */
+  missingImages(ids: string[]): string[] {
+    return [...new Set(ids)].filter(id => !IMAGE_REF.test(id) || !this.imageRow(id)?.complete)
+  }
+
+  private imageRow(id: string) {
+    return this.sql.exec<ImageRow>('SELECT * FROM images WHERE id = ?', id).toArray()[0] ?? null
+  }
+
   touch(req: { pageId: string; revision: number; savedAt: string }): Result {
     if (!Number.isSafeInteger(req?.revision)) return { ok: false }
     this.sql.exec('UPDATE pages SET revision = MAX(revision, ?), updated_at = ? WHERE id = ?', req.revision, req.savedAt, req.pageId)

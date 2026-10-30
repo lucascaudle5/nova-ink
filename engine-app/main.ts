@@ -56,19 +56,20 @@ function closePanels(except?: HTMLElement) {
 const tools = mountTools(surface, { storagePrefix: 'nova-ink-engine-app', onOpenPopover: () => closePanels() })
 
 const editor: PageEditor = {
-  strokes: () => surface.doc.strokes,
+  items: () => [...surface.doc.images, ...surface.doc.strokes],
   paper: () => surface.paper,
   camera: () => surface.camera,
-  load(strokes, paper, camera) {
+  load(strokes, images, paper, camera) {
     surface.setPaper(paper)
-    surface.load(strokes)
+    surface.load(strokes, images)
     if (camera) surface.setCamera(camera)
     else surface.fitToContent()
+    loadPictures(images.map(i => i.image))
   },
   setReadOnly(readOnly) {
     surface.readOnly = readOnly
     document.body.classList.toggle('read-only', readOnly)
-    for (const b of document.querySelectorAll<HTMLButtonElement>('.toolbar button, #page')) b.disabled = readOnly
+    for (const b of document.querySelectorAll<HTMLButtonElement>('.toolbar button, #page, #insert-image')) b.disabled = readOnly
     if (readOnly) tools.closePopover()
   },
 }
@@ -96,7 +97,96 @@ if (preview) {
 }
 
 const session = new NotebookSession({ api, clientId: persistentClientId(), editor })
-surface.onChange(() => session.changed())
+surface.onChange(() => { session.changed(); renderImageBar() })
+
+// ---- Pictures ----
+
+/** Decoded pictures by stored id; a page shows a placeholder box until its picture is here. */
+const pictures = new Map<string, ImageBitmap | 'loading' | 'failed'>()
+surface.setImageSource(id => { const p = pictures.get(id); return p && typeof p !== 'string' ? p : null })
+
+function loadPictures(ids: string[]) {
+  const wanted = [...new Set(ids)].filter(id => !pictures.has(id) || pictures.get(id) === 'failed')
+  for (const id of wanted) pictures.set(id, 'loading')
+  // Two at a time, so a page full of pictures does not flood the connection.
+  let next = 0
+  const worker = async () => {
+    while (next < wanted.length) {
+      const id = wanted[next++]
+      const stored = await session.fetchImage(id)
+      try {
+        if (!stored) throw new Error('unavailable')
+        pictures.set(id, await createImageBitmap(new Blob([stored.bytes as BlobPart], { type: stored.mime })))
+      } catch { pictures.set(id, 'failed') }
+      surface.imagesChanged()
+    }
+  }
+  void Promise.all([worker(), worker()])
+}
+
+/** Longest side of a stored picture; enough for a full-screen iPad view, small enough to upload quickly. */
+const PICTURE_MAX_SIDE = 2048
+
+/** Decodes the chosen file and re-encodes it at most PICTURE_MAX_SIDE pixels on its longest side. */
+async function preparePicture(file: File): Promise<{ bitmap: ImageBitmap; bytes: Uint8Array; mime: string }> {
+  const source = await createImageBitmap(file)
+  const k = Math.min(1, PICTURE_MAX_SIDE / Math.max(source.width, source.height))
+  const w = Math.max(1, Math.round(source.width * k)), h = Math.max(1, Math.round(source.height * k))
+  const canvas = document.createElement('canvas')
+  canvas.width = w; canvas.height = h
+  canvas.getContext('2d')!.drawImage(source, 0, 0, w, h)
+  source.close()
+  const encode = (type: string, quality?: number) => new Promise<Blob | null>(resolve => canvas.toBlob(resolve, type, quality))
+  // PNG keeps screenshots and diagrams sharp (and transparent); photos, or PNGs that come out large, become JPEG.
+  let blob = file.type === 'image/png' ? await encode('image/png') : null
+  if (!blob || blob.size > 3 * 1024 * 1024) blob = await encode('image/jpeg', 0.86)
+  if (!blob) throw new Error('This browser could not encode the picture.')
+  const bitmap = await createImageBitmap(canvas)
+  return { bitmap, bytes: new Uint8Array(await blob.arrayBuffer()), mime: blob.type || 'image/jpeg' }
+}
+
+let inserting = false
+async function insertPicture(file: File) {
+  const state = session.getState()
+  if (inserting || !state.pageId || !state.editable || state.conflict) return
+  inserting = true
+  renderImageBar()
+  try {
+    session.say('Preparing the picture…')
+    let prepared: Awaited<ReturnType<typeof preparePicture>>
+    try { prepared = await preparePicture(file) } catch (error) {
+      session.say(`That file could not be opened as a picture (${error instanceof Error ? error.message : String(error)}). Nothing was added.`)
+      return
+    }
+    const { bitmap, bytes, mime } = prepared
+    const imageId = await session.uploadImage({ bytes, mime, width: bitmap.width, height: bitmap.height }, (done, count) => session.say(`Uploading the picture… ${Math.round((done / count) * 100)}%`))
+    if (!imageId) { bitmap.close(); return }
+    pictures.set(imageId, bitmap)
+    const now = session.getState()
+    if (now.pageId !== state.pageId || !now.editable || now.conflict) { session.say('The picture was stored, but this page can no longer be edited here, so it was not placed.'); return }
+    surface.insertImage(imageId, bitmap.width, bitmap.height)
+  } finally {
+    inserting = false
+    renderImageBar()
+  }
+}
+
+const imageFile = $<HTMLInputElement>('image-file')
+$('insert-image').addEventListener('click', () => { tools.closePopover(); imageFile.value = ''; imageFile.click() })
+imageFile.addEventListener('change', () => { const file = imageFile.files?.[0]; if (file) void insertPicture(file) })
+$('image-delete').addEventListener('click', () => surface.deleteSelectedImage())
+$('image-done').addEventListener('click', () => surface.setTool('pen'))
+
+window.addEventListener('keydown', e => {
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && surface.selectedImage) { e.preventDefault(); surface.deleteSelectedImage() }
+})
+if (preview) Object.assign(window, { novaInsertPicture: insertPicture, novaSurface: surface })
+
+function renderImageBar() {
+  $('image-bar').hidden = !surface.selectedImage
+  $<HTMLButtonElement>('insert-image').disabled = inserting || surface.readOnly
+}
 
 function applyHost(context: McpUiHostContext | undefined) {
   host = context

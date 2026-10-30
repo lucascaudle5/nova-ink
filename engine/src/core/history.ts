@@ -1,11 +1,13 @@
-import type { InkDocument, Placed } from './document'
-import type { Stroke } from './types'
+import type { InkDocument, Placed, PlacedImage } from './document'
+import type { ImageItem, Stroke } from './types'
 
 type Command =
   | { kind: 'add'; strokes: Stroke[] }
   | { kind: 'remove'; entries: Placed[] }
   | { kind: 'replace'; removed: Placed; pieces: Stroke[] }
   | { kind: 'group'; commands: Command[] }
+  /** before = null: inserted; after = null: deleted; both: moved or resized. */
+  | { kind: 'image'; before: PlacedImage | null; after: ImageItem | null }
 
 /**
  * Undo/redo for one document. All edits made through History are undoable; edits made directly on
@@ -41,6 +43,24 @@ export class History {
     const removed = this.doc.replace(id, pieces)
     if (removed) this.record({ kind: 'replace', removed, pieces: [...pieces] })
     return !!removed
+  }
+
+  insertImage(image: ImageItem): void {
+    this.doc.addImage(image)
+    this.record({ kind: 'image', before: null, after: image })
+  }
+
+  deleteImage(id: string): boolean {
+    const before = this.doc.removeImage(id)
+    if (before) this.record({ kind: 'image', before, after: null })
+    return !!before
+  }
+
+  /** Moves or resizes: `next` takes the placement's place. */
+  replaceImage(id: string, next: ImageItem): boolean {
+    const before = this.doc.replaceImage(id, next)
+    if (before) this.record({ kind: 'image', before, after: next })
+    return !!before
   }
 
   /** Everything until endGroup() becomes one undo step (one eraser gesture). */
@@ -89,6 +109,11 @@ export class History {
       case 'remove': this.doc.remove(command.entries.map(e => e.stroke.id)); break
       case 'replace': this.doc.replace(command.removed.stroke.id, command.pieces); break
       case 'group': for (const c of command.commands) this.apply(c); break
+      case 'image':
+        if (command.before && command.after) this.doc.replaceImage(command.before.image.id, command.after)
+        else if (command.after) this.doc.addImage(command.after)
+        else if (command.before) this.doc.removeImage(command.before.image.id)
+        break
     }
   }
 
@@ -101,6 +126,11 @@ export class History {
         this.doc.restore([command.removed])
         break
       case 'group': for (let i = command.commands.length - 1; i >= 0; i--) this.revert(command.commands[i]); break
+      case 'image':
+        if (command.before && command.after) this.doc.replaceImage(command.after.id, command.before.image)
+        else if (command.after) this.doc.removeImage(command.after.id)
+        else if (command.before) this.doc.addImage(command.before.image, command.before.index)
+        break
     }
   }
 }

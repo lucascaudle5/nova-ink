@@ -3,7 +3,8 @@ import type { GestureFrame } from './camera'
 import type { Camera } from './types'
 
 export type PointerKind = 'pen' | 'touch' | 'mouse'
-export type Tool = 'pen' | 'eraser'
+/** 'select' picks, moves and resizes images with the pen or mouse. */
+export type Tool = 'pen' | 'eraser' | 'select'
 
 /** One input sample in screen (CSS pixel) coordinates. `t` is the event timestamp in ms. */
 export interface PointerSample { x: number; y: number; pressure: number; t: number }
@@ -32,6 +33,10 @@ export interface InputHandlers {
   /** Page position and radius in page units. Called at least every radius/2 along fast movements. */
   eraseAt(x: number, y: number, radius: number): void
   eraseEnd(): void
+  /** Select tool. Positions are page coordinates; `screen` is the same point in CSS pixels (for handle hits). */
+  selectBegin?(sample: PageSample, screen: PointerSample): void
+  selectMove?(sample: PageSample): void
+  selectEnd?(cancelled: boolean): void
   /** Quick two-finger tap. */
   undo?(): void
   /** Quick three-finger tap. */
@@ -103,6 +108,8 @@ export class InputController {
         const [first, ...rest] = samples.map(s => this.toPageSample(s))
         this.handlers.strokeBegin(first)
         if (rest.length) this.handlers.strokeExtend(rest)
+      } else if (this.inkMode === 'select') {
+        this.handlers.selectBegin?.(this.toPageSample(samples[0]), samples[0])
       } else {
         this.handlers.eraseBegin()
         this.lastErase = null
@@ -113,10 +120,12 @@ export class InputController {
     if (id !== this.inkPointer) return
     if (samples.length) {
       if (this.inkMode === 'pen') this.handlers.strokeExtend(samples.map(s => this.toPageSample(s)))
+      else if (this.inkMode === 'select') this.handlers.selectMove?.(this.toPageSample(samples[samples.length - 1]))
       else for (const s of samples) this.eraseSample(s)
     }
     if (phase === 'up' || phase === 'cancel') {
       if (this.inkMode === 'pen') this.handlers.strokeEnd(phase === 'cancel')
+      else if (this.inkMode === 'select') this.handlers.selectEnd?.(phase === 'cancel')
       else this.handlers.eraseEnd()
       this.penUpAt = this.lastInkT
       this.inkPointer = null

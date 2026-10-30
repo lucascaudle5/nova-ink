@@ -34,5 +34,28 @@ export interface Stroke {
   readonly createdAt: number
 }
 
+/**
+ * A picture placed on the page, always drawn under the ink. Like strokes, placements are immutable:
+ * moving or resizing one replaces it with a new id. `image` names the stored picture, which several
+ * placements (and pages) can share; the engine never stores the picture itself.
+ */
+export interface ImageItem {
+  readonly kind: 'image'
+  readonly id: string
+  readonly author: Author
+  readonly image: string
+  /** Top-left corner and size in page units. */
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+  readonly bounds: Bounds
+  readonly createdAt: number
+}
+
+/** Anything a page holds, as stored per row. Strokes have no `kind`. */
+export type PageItem = Stroke | ImageItem
+export const isImage = (item: PageItem): item is ImageItem => (item as ImageItem).kind === 'image'
+
 /** Screen = (page - (x, y)) * z. (x, y) is the page point at the top-left of the view. */
 export interface Camera { x: number; y: number; z: number }

@@ -12,7 +12,8 @@
  */
 import { DurableObject } from 'cloudflare:workers'
 import { MAX_ZOOM, MIN_ZOOM } from '../../../engine/src/core/camera'
-import { parseStroke, STROKE_ID } from '../../../engine/src/core/format'
+import { parseItem, serializeImage, STROKE_ID } from '../../../engine/src/core/format'
+import { isImage } from '../../../engine/src/core/types'
 import { isOrderKey } from '../../../engine/src/core/order'
 import { DEFAULT_PAPER, isPaper } from '../../../engine/src/core/paper'
 import type { Paper } from '../../../engine/src/core/paper'
@@ -284,14 +285,18 @@ export class PageDO extends DurableObject {
       for (let i = 0; i < adds.length; i++) {
         const add = adds[i]
         if (!add || !isOrderKey(add.key)) return fail('INVALID_STROKE', `Added stroke ${i + 1} has an invalid order key. Nothing was saved.`)
-        const parsed = parseStroke(add.stroke, `Added stroke ${i + 1}`)
+        const parsed = parseItem(add.stroke, `Added stroke ${i + 1}`)
         if (!parsed.ok) return fail('INVALID_STROKE', `${parsed.message} Nothing was saved.`)
-        if (ids.has(parsed.stroke.id)) return fail('INVALID_STROKE', `Added stroke ${i + 1} repeats an id. Nothing was saved.`)
-        ids.add(parsed.stroke.id)
+        const item = parsed.item
+        if (ids.has(item.id)) return fail('INVALID_STROKE', `Added stroke ${i + 1} repeats an id. Nothing was saved.`)
+        ids.add(item.id)
         const s = add.stroke as Record<string, unknown>
-        const json = JSON.stringify({ id: s.id, author: s.author, color: s.color, width: s.width, createdAt: s.createdAt, n: s.n, points: s.points })
+        // Only known fields are stored; an image row refers to a picture the MCP layer checked exists.
+        const json = isImage(item)
+          ? JSON.stringify(serializeImage(item))
+          : JSON.stringify({ id: s.id, author: s.author, color: s.color, width: s.width, createdAt: s.createdAt, n: s.n, points: s.points })
         if (encoder.encode(json).length > MAX_STROKE_BYTES) return fail('INVALID_STROKE', `Added stroke ${i + 1} is too large. Nothing was saved.`)
-        rows.push({ id: parsed.stroke.id, key: add.key, json })
+        rows.push({ id: item.id, key: add.key, json })
       }
 
       const strokesChanged = rows.length > 0 || removes.length > 0

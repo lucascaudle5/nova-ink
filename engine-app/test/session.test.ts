@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import { serializeStroke } from '../../engine/src/core/format'
 import type { Paper } from '../../engine/src/core/paper'
 import { createStroke } from '../../engine/src/core/stroke'
-import type { Camera, Stroke } from '../../engine/src/core/types'
+import type { Camera, ImageItem, Stroke } from '../../engine/src/core/types'
+import { createImage } from '../../engine/src/core/image'
 import { NotebookSession } from '../session'
 import type { PageEditor } from '../session'
 import { MockServer } from '../mock-server'
@@ -13,10 +14,11 @@ class FakeEditor implements PageEditor {
   page: Paper = { color: 'white', pattern: 'blank' }
   view: Camera = { x: 0, y: 0, z: 1 }
   readOnly = false
-  strokes() { return this.list }
+  pictures: ImageItem[] = []
+  items() { return [...this.pictures, ...this.list] }
   paper() { return this.page }
   camera() { return this.view }
-  load(strokes: Stroke[], paper: Paper, camera: Camera | null) { this.list = strokes; this.page = paper; this.view = camera ?? { x: 0, y: 0, z: 1 } }
+  load(strokes: Stroke[], images: ImageItem[], paper: Paper, camera: Camera | null) { this.list = strokes; this.pictures = images; this.page = paper; this.view = camera ?? { x: 0, y: 0, z: 1 } }
   setReadOnly(readOnly: boolean) { this.readOnly = readOnly }
 }
 
@@ -219,5 +221,39 @@ test('a cover color shows at once, before the server answers, and quick changes 
   await Promise.all([a, b])
   assert.equal(session.getState().notebooks[0].color, '#1f7a5c')
   assert.equal(server.notebooks[0].color, '#1f7a5c')
+  done()
+})
+
+test('pictures: uploaded in pieces before placing; the placement saves, reopens and the picture reads back', async () => {
+  const { server, session, editor, done } = await rig()
+  const bytes = new Uint8Array(200 * 1024 * 2 + 77).map((_, i) => (i * 7) & 0xff)
+  const progress: string[] = []
+  const imageId = await session.uploadImage({ bytes, mime: 'image/jpeg', width: 1600, height: 1200 }, (d, n) => progress.push(`${d}/${n}`))
+  assert.ok(imageId)
+  assert.deepEqual(progress, ['1/3', '2/3', '3/3'])
+  editor.pictures = [createImage({ image: imageId!, x: 0, y: 0, w: 400, h: 300 })]
+  session.changed()
+  await session.save()
+  assert.equal(session.getState().status, 'saved')
+  done()
+
+  const other = await rig(server)
+  assert.deepEqual(other.editor.pictures.map(p => [p.image, p.w, p.h]), [[imageId, 400, 300]])
+  const back = await other.session.fetchImage(imageId!)
+  assert.ok(back && back.bytes.length === bytes.length && back.bytes.every((b, i) => b === bytes[i]) && back.mime === 'image/jpeg')
+  other.done()
+})
+
+test('pictures: a failed upload adds nothing, and a placement without its picture is not saved', async () => {
+  const { server, session, editor, done } = await rig()
+  server.offline = true
+  assert.equal(await session.uploadImage({ bytes: new Uint8Array(10), mime: 'image/png', width: 2, height: 2 }), null)
+  assert.match(session.getState().message, /not added/)
+  server.offline = false
+  editor.pictures = [createImage({ image: 'never-uploaded', x: 0, y: 0, w: 40, h: 30 })]
+  session.changed()
+  await session.save()
+  assert.equal(session.getState().status, 'notSynced')
+  assert.equal(server.pages.get(server.first)!.rows.size, 0)
   done()
 })

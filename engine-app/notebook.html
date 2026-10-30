@@ -32,6 +32,9 @@
       <button data-tool="eraser" class="tool" title="Eraser (tap again for size and mode)" aria-label="Eraser" data-popover-anchor>
         <svg viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></svg>
       </button>
+      <button data-tool="select" class="tool" title="Select pictures: tap to select, drag to move, drag the corner to resize" aria-label="Select pictures">
+        <svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-7.5L21 10z" /></svg>
+      </button>
       <span class="sep"></span>
       <span id="width-slots" class="slots" title="Tap a width to use it; tap it again to change it." data-popover-anchor></span>
       <span class="sep"></span>
@@ -46,6 +49,10 @@
     </nav>
 
     <nav class="corner floating" aria-label="View">
+      <button id="insert-image" title="Insert a picture" aria-label="Insert a picture">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-9 9" /></svg>
+      </button>
+      <input id="image-file" type="file" accept="image/*" hidden />
       <button id="page" title="Page style" aria-label="Page style" data-popover-anchor>
         <svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M4 9h16M4 15h16M10 3v18" /></svg>
       </button>
@@ -79,6 +86,12 @@
 
     <aside id="pages" class="pages panel" hidden aria-label="Pages"></aside>
     <div id="menu" class="menu panel" hidden></div>
+
+    <div id="image-bar" class="image-bar floating" hidden>
+      <span>Picture selected</span>
+      <button id="image-delete" class="danger">Delete</button>
+      <button id="image-done">Done</button>
+    </div>
 
     <footer class="status" aria-live="polite">
       <span id="status-dot" class="dot"></span>

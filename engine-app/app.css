@@ -47,6 +47,14 @@ body { min-height: 480px; }
 .pages .trash .open { color: var(--muted); }
 .pages .empty { padding: 10px; color: var(--muted); }
 
+.image-bar {
+  top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 56px); left: 50%; transform: translateX(-50%);
+  gap: 6px; padding: 6px 6px 6px 14px; font-size: 13px; font-weight: 600;
+}
+.image-bar[hidden] { display: none; }
+.floating.image-bar button { width: auto; padding: 0 12px; font-weight: 600; }
+.floating.image-bar button.danger { color: var(--danger); }
+
 .pages header .title { flex: 1; min-width: 0; padding: 6px 2px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Library: a full-screen shelf over the canvas. The open page stays loaded underneath and keeps saving. */

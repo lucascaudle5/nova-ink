@@ -1,9 +1,10 @@
 import { CodecError, fromBase64, toBase64, unzigzag, VarintReader, writeVarint, zigzag } from './codec'
 import { DEFAULT_PAPER, isPaper } from './paper'
 import type { Paper } from './paper'
+import { createImage, IMAGE_ID } from './image'
 import { createStroke, MAX_POINTS_PER_STROKE } from './stroke'
-import { POINT_STRIDE } from './types'
-import type { Author, Stroke } from './types'
+import { isImage, POINT_STRIDE } from './types'
+import type { Author, ImageItem, PageItem, Stroke } from './types'
 
 /**
  * NOVA ink page format, version 1 (experimental: not used by any saved notebook yet).
@@ -135,6 +136,63 @@ export function parseStroke(data: unknown, where = 'Stroke'): { ok: true; stroke
 }
 
 export const STROKE_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/**
+ * An image placement as stored per row: { id, kind: "image", author, createdAt, image, x, y, w, h }.
+ * Positions are kept to 0.01 page units. `image` names a picture stored separately by the host.
+ */
+export interface SerializedImage {
+  id: string
+  kind: 'image'
+  author: Author
+  createdAt: number
+  image: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export type SerializedItem = SerializedStroke | SerializedImage
+
+const round2 = (v: number) => Math.round(v * XY_SCALE) / XY_SCALE
+const encodedImages = new WeakMap<ImageItem, SerializedImage>()
+
+export function serializeImage(i: ImageItem): SerializedImage {
+  let out = encodedImages.get(i)
+  if (!out) {
+    out = Object.freeze({ id: i.id, kind: 'image' as const, author: i.author, createdAt: i.createdAt, image: i.image, x: round2(i.x), y: round2(i.y), w: round2(i.w), h: round2(i.h) })
+    encodedImages.set(i, out)
+  }
+  return out
+}
+
+export function serializeItem(item: PageItem): SerializedItem {
+  return isImage(item) ? serializeImage(item) : serializeStroke(item)
+}
+
+export function parseImage(data: unknown, where = 'Image'): { ok: true; image: ImageItem } | { ok: false; message: string } {
+  const s = data as Partial<SerializedImage> | null
+  const bad = (problem: string) => ({ ok: false as const, message: `${where} ${problem}` })
+  if (!s || typeof s !== 'object' || s.kind !== 'image') return bad('is not an image.')
+  if (typeof s.id !== 'string' || !STROKE_ID.test(s.id)) return bad('has an invalid id.')
+  if (!AUTHORS.includes(s.author as Author)) return bad('has an unknown author.')
+  if (typeof s.createdAt !== 'number' || !Number.isFinite(s.createdAt)) return bad('has an invalid time.')
+  if (typeof s.image !== 'string' || !IMAGE_ID.test(s.image)) return bad('has an invalid picture reference.')
+  try {
+    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x: s.x as number, y: s.y as number, w: s.w as number, h: s.h as number }) }
+  } catch (error) {
+    return bad(`has an invalid position or size (${error instanceof Error ? error.message : String(error)}).`)
+  }
+}
+
+/** A stored row: an image when it says `kind: "image"`, otherwise a stroke. Any other `kind` is refused. */
+export function parseItem(data: unknown, where = 'Item'): { ok: true; item: PageItem } | { ok: false; message: string } {
+  const kind = data && typeof data === 'object' ? (data as { kind?: unknown }).kind : undefined
+  if (kind === 'image') { const r = parseImage(data, where); return r.ok ? { ok: true, item: r.image } : r }
+  if (kind !== undefined) return { ok: false, message: `${where} is of an unknown kind; it may come from a newer NOVA Ink.` }
+  const r = parseStroke(data, where)
+  return r.ok ? { ok: true, item: r.stroke } : r
+}
 
 function invalid(message: string): ParseResult {
   return { ok: false, code: 'INVALID', message: `${message} Nothing was loaded.` }

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { createStroke } from '../../../engine/src/core/stroke'
 import type { Paper } from '../../../engine/src/core/paper'
-import type { Camera, Stroke } from '../../../engine/src/core/types'
+import type { Camera, ImageItem, Stroke } from '../../../engine/src/core/types'
 import { NotebookSession } from '../../../engine-app/session'
 import type { Api, PageEditor } from '../../../engine-app/session'
 import { signIn, tool } from './helpers'
@@ -15,10 +15,11 @@ class Editor implements PageEditor {
   page: Paper = { color: 'white', pattern: 'blank' }
   view: Camera = { x: 0, y: 0, z: 1 }
   readOnly = false
-  strokes() { return this.list }
+  pictures: ImageItem[] = []
+  items() { return [...this.pictures, ...this.list] }
   paper() { return this.page }
   camera() { return this.view }
-  load(strokes: Stroke[], paper: Paper, camera: Camera | null) { this.list = strokes; this.page = paper; this.view = camera ?? { x: 0, y: 0, z: 1 } }
+  load(strokes: Stroke[], images: ImageItem[], paper: Paper, camera: Camera | null) { this.list = strokes; this.pictures = images; this.page = paper; this.view = camera ?? { x: 0, y: 0, z: 1 } }
   setReadOnly(readOnly: boolean) { this.readOnly = readOnly }
 }
 

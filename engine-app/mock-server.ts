@@ -22,6 +22,7 @@ const DEFAULT_PAPER: Paper = { color: 'white', pattern: 'blank' }
 
 export class MockServer {
   folders: MockFolder[] = []
+  images = new Map<string, { mime: string; width: number; height: number; bytes: number; count: number; pieces: Map<number, string> }>()
   notebooks: MockNotebook[] = []
   pages = new Map<string, MockPage>()
   last: { notebookId: string; pageId: string } | null = null
@@ -117,6 +118,17 @@ export class MockServer {
         for (const n of this.notebooks) if (n.folderId === folder.id) n.folderId = null
         folder.deletedAt = new Date().toISOString(); return ok()
       case 'nb_restore_folder': if (!folder) return missing(); folder.deletedAt = null; return ok()
+      case 'nb_put_image': {
+        let entry = this.images.get(a.imageId)
+        if (!entry) this.images.set(a.imageId, entry = { mime: a.mime, width: a.width, height: a.height, bytes: a.bytes, count: a.count, pieces: new Map() })
+        entry.pieces.set(a.index, a.data)
+        return ok({ complete: entry.pieces.size === entry.count })
+      }
+      case 'nb_get_image': {
+        const entry = this.images.get(a.imageId)
+        if (!entry || entry.pieces.size !== entry.count) return { ok: false, code: 'NOT_FOUND', message: 'That picture was not found.' }
+        return ok({ mime: entry.mime, width: entry.width, height: entry.height, bytes: entry.bytes, count: entry.count, index: a.index, data: entry.pieces.get(a.index) })
+      }
       case 'nb_rename_notebook': if (!book) return missing(); book.name = a.name; return ok()
       case 'nb_remove_notebook':
         if (!book) return missing()
@@ -162,6 +174,11 @@ export class MockServer {
         if (p.last && p.last.saveId === a.saveId && p.last.clientId === a.clientId) return ok({ replayed: true, revision: p.last.revision, savedAt: new Date().toISOString() })
         if (p.lease && p.lease.clientId !== a.clientId && p.lease.until > this.now) return { ok: false, code: 'LEASE_HELD', message: 'Another device is editing this page.' }
         if (a.baseRevision !== p.revision) return { ok: false, code: 'CONFLICT', message: 'This page has a newer version.', revision: p.revision, ...(p.last && p.last.clientId === a.clientId ? { ownLastSaveId: p.last.saveId } : {}) }
+        const missingImage = (a.adds ?? []).some((x: { stroke: { kind?: string; image?: string } }) => {
+          const picture = x.stroke.kind === 'image' ? this.images.get(x.stroke.image ?? '') : null
+          return picture === undefined || (!!picture && picture.pieces.size !== picture.count)
+        })
+        if (missingImage) return { ok: false, code: 'MISSING_IMAGE', message: 'A picture on this page was not uploaded completely. Nothing was saved.' }
         for (const id of a.removes ?? []) p.rows.delete(id)
         for (const add of a.adds ?? []) p.rows.set((add.stroke as { id: string }).id, add)
         if (a.paper) p.paper = a.paper

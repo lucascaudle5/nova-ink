@@ -141,10 +141,22 @@ export function createEngineServer(ctx: ServerContext): McpServer {
   }), 'mcp:write', async a => {
     const own = await owned(a.pageId, true)
     if ('error' in own) return own.error
+    const pictures = (a.adds ?? []).filter(x => x.stroke.kind === 'image').map(x => String(x.stroke.image))
+    if (pictures.length) {
+      const missing = await library().missingImages(pictures) as string[]
+      if (missing.length) return { ok: false, code: 'MISSING_IMAGE', message: 'A picture on this page was not uploaded completely. Nothing was saved.', missing }
+    }
     const saved = await page(a.pageId).save(a)
     if (saved.ok && !saved.replayed) await touch(a.pageId, saved.revision, saved.savedAt, own.meta.revision === 0)
     return saved
   })
+
+  tool('nb_put_image', 'Store one piece of a picture the user chose to insert', z.object({
+    imageId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), mime: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().positive(), height: z.number().int().positive(), bytes: z.number().int().positive(),
+    count: z.number().int().positive().max(64), index: z.number().int().nonnegative(), data: z.string().max(270_000),
+  }), 'mcp:write', a => library().putImageChunk(a))
+  tool('nb_get_image', 'Read one piece of a stored picture', z.object({ imageId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), index: z.number().int().nonnegative() }), 'mcp:read', a => library().getImageChunk(a))
 
   tool('nb_heartbeat', 'Renew editing control of a page', z.object({ pageId: uuid, clientId: uuid }), 'mcp:read', async a => {
     const own = await owned(a.pageId, false)

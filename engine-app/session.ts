@@ -7,21 +7,28 @@
  * - One save in flight. A save whose reply was lost is retried with the same saveId, so the server replays it.
  * - Another device's newer version or editing control is a conflict, never overwritten.
  */
-import { parseStroke } from '../engine/src/core/format'
+import { parseItem } from '../engine/src/core/format'
 import type { Paper } from '../engine/src/core/paper'
 import { PageSync } from '../engine/src/core/sync'
 import type { PageDelta } from '../engine/src/core/sync'
-import type { Camera, Stroke } from '../engine/src/core/types'
+import { isImage } from '../engine/src/core/types'
+import type { Camera, ImageItem, PageItem, Stroke } from '../engine/src/core/types'
+
+/** Must match the server's piece size (cloudflare/src/engine/library-do.ts IMAGE_CHUNK_BYTES). */
+export const IMAGE_CHUNK_BYTES = 192 * 1024
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+export interface StoredPicture { bytes: Uint8Array; mime: string; width: number; height: number }
 
 export type Data = Record<string, any> & { ok: boolean; code?: string; message?: string }
 export type Api = (name: string, args: Record<string, unknown>) => Promise<Data>
 
 export interface PageEditor {
-  strokes(): readonly Stroke[]
+  /** Everything on the page in stored order: image placements first (they are under the ink), then strokes. */
+  items(): readonly PageItem[]
   paper(): Paper
   camera(): Camera
   /** Replaces the page (clears undo) and shows it; a null camera fits the content. */
-  load(strokes: Stroke[], paper: Paper, camera: Camera | null): void
+  load(strokes: Stroke[], images: ImageItem[], paper: Paper, camera: Camera | null): void
   setReadOnly(readOnly: boolean): void
 }
 
@@ -59,6 +66,18 @@ export interface SessionOptions {
 }
 
 type Pending = { saveId: string; baseRevision: number; delta: PageDelta; paper?: Paper; camera?: Camera }
+
+function base64(bytes: Uint8Array): string {
+  let raw = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) raw += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(raw)
+}
+function unbase64(text: string): Uint8Array {
+  const raw = atob(text)
+  const out = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
+  return out
+}
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const samePaper = (a: Paper | null, b: Paper) => !!a && a.color === b.color && a.pattern === b.pattern
@@ -111,6 +130,8 @@ export class NotebookSession {
     for (const listener of this.listeners) listener()
   }
   private status(status: Status, message: string, patch: Partial<SessionState> = {}) { this.set({ status, message, ...patch }) }
+  /** Shows a progress or result message without changing the save status. */
+  say(message: string) { this.set({ message }) }
 
   get currentPage(): PageInfo | null {
     for (const n of this.state.notebooks) for (const p of n.pages) if (p.id === this.state.pageId) return p
@@ -120,7 +141,7 @@ export class NotebookSession {
   /** Strokes, paper or camera differ from the last confirmed save. */
   get hasUnsavedChanges(): boolean {
     if (!this.state.pageId || this.state.status === 'loading') return false
-    return !!this.pending || this.sync.hasChanges(this.editor.strokes()) || !samePaper(this.ackPaper, this.editor.paper()) || cameraKey(this.editor.camera()) !== this.ackCamera
+    return !!this.pending || this.sync.hasChanges(this.editor.items()) || !samePaper(this.ackPaper, this.editor.paper()) || cameraKey(this.editor.camera()) !== this.ackCamera
   }
 
   /** Changes that are not saved and cannot be saved here as things stand (conflict, damage, trash). */
@@ -128,7 +149,7 @@ export class NotebookSession {
     return this.hasStrokeChanges && (!!this.state.conflict || !this.state.editable)
   }
   private get hasStrokeChanges() {
-    return !!this.pending?.delta.adds.length || !!this.pending?.delta.removes.length || this.sync.hasChanges(this.editor.strokes()) || !samePaper(this.ackPaper, this.editor.paper())
+    return !!this.pending?.delta.adds.length || !!this.pending?.delta.removes.length || this.sync.hasChanges(this.editor.items()) || !samePaper(this.ackPaper, this.editor.paper())
   }
 
   // ---- serialized work ----
@@ -189,7 +210,7 @@ export class NotebookSession {
       this.sync = new PageSync(loaded.keys)
       this.pending = null
       this.retryAttempt = 0
-      this.editor.load(loaded.strokes, res.paper, res.camera ?? null)
+      this.editor.load(loaded.strokes, loaded.images, res.paper, res.camera ?? null)
       this.ackPaper = { ...res.paper }
       this.ackCamera = cameraKey(this.editor.camera())
       const editable = !res.readOnly
@@ -216,7 +237,7 @@ export class NotebookSession {
       }
       this.stopTimers()
       this.sync = new PageSync()
-      this.editor.load([], this.editor.paper(), null)
+      this.editor.load([], [], this.editor.paper(), null)
       this.editor.setReadOnly(true)
       this.set({ notebookId, pageId: null, editable: false, conflict: null, revision: 0 })
       this.status('saved', 'This notebook has no pages. Add a page to start.')
@@ -235,19 +256,20 @@ export class NotebookSession {
     }
   }
 
-  /** Parses the server's stroke rows; null if any is damaged (the page is then not shown at all). */
-  private decode(rows: unknown): { strokes: Stroke[]; keys: Array<{ id: string; key: string }> } | null {
+  /** Parses the server's rows (strokes and image placements); null if any is damaged (the page is then not shown at all). */
+  private decode(rows: unknown): { strokes: Stroke[]; images: ImageItem[]; keys: Array<{ id: string; key: string }> } | null {
     let list: Array<{ key: string; stroke: unknown }>
     try { list = JSON.parse(String(rows)) } catch { return null }
     if (!Array.isArray(list)) return null
-    const strokes: Stroke[] = [], keys: Array<{ id: string; key: string }> = []
+    const strokes: Stroke[] = [], images: ImageItem[] = [], keys: Array<{ id: string; key: string }> = []
     for (const row of list) {
-      const parsed = parseStroke(row?.stroke)
+      const parsed = parseItem(row?.stroke)
       if (!parsed.ok || typeof row.key !== 'string') return null
-      strokes.push(parsed.stroke)
-      keys.push({ id: parsed.stroke.id, key: row.key })
+      if (isImage(parsed.item)) images.push(parsed.item)
+      else strokes.push(parsed.item)
+      keys.push({ id: parsed.item.id, key: row.key })
     }
-    return { strokes, keys }
+    return { strokes, images, keys }
   }
 
   // ---- editing and saving ----
@@ -286,7 +308,7 @@ export class NotebookSession {
       if (!this.hasUnsavedChanges) { if (this.state.status !== 'saved') this.status('saved', 'Saved'); return 'nothing' }
       const paper = this.editor.paper(), camera = this.editor.camera()
       req = {
-        saveId: this.newId(), baseRevision: this.state.revision, delta: this.sync.delta(this.editor.strokes()),
+        saveId: this.newId(), baseRevision: this.state.revision, delta: this.sync.delta(this.editor.items()),
         ...(samePaper(this.ackPaper, paper) ? {} : { paper: { ...paper } }),
         ...(cameraKey(camera) === this.ackCamera ? {} : { camera: { x: round(camera.x, 1), y: round(camera.y, 1), z: round(camera.z, 4) } }),
       }
@@ -381,7 +403,7 @@ export class NotebookSession {
           const loaded = this.decode(res.rows)
           if (!loaded) { this.status('recovery', 'This page on the server is damaged and was not loaded.', { conflict: 'damaged', editable: false }); return }
           this.sync = new PageSync(loaded.keys)
-          this.editor.load(loaded.strokes, res.paper, res.camera ?? null)
+          this.editor.load(loaded.strokes, loaded.images, res.paper, res.camera ?? null)
           this.ackPaper = { ...res.paper }
           this.ackCamera = cameraKey(this.editor.camera())
         }
@@ -431,6 +453,50 @@ export class NotebookSession {
       await this.saveNow()
       return true
     })
+  }
+
+  // ---- pictures ----
+
+  /**
+   * Stores a picture in pieces and returns its id once the server confirmed every piece, or null (with a
+   * message) if it could not. Only then may a placement that uses it be added to a page. Failed pieces are
+   * retried a few times; re-sending a piece is harmless.
+   */
+  async uploadImage(picture: StoredPicture, onProgress?: (done: number, count: number) => void): Promise<string | null> {
+    const { bytes, mime, width, height } = picture
+    if (bytes.length > MAX_IMAGE_BYTES) { this.set({ message: `That picture is too large to store (${(bytes.length / 1048576).toFixed(1)} MB; the limit is 8 MB).` }); return null }
+    const imageId = this.newId()
+    const count = Math.max(1, Math.ceil(bytes.length / IMAGE_CHUNK_BYTES))
+    for (let index = 0; index < count; index++) {
+      const data = base64(bytes.subarray(index * IMAGE_CHUNK_BYTES, (index + 1) * IMAGE_CHUNK_BYTES))
+      let res: Data = { ok: false }
+      for (let attempt = 0; attempt < 3 && !res.ok; attempt++) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, 800 * attempt))
+        res = await this.call('nb_put_image', { imageId, mime, width, height, bytes: bytes.length, count, index, data })
+        if (!res.ok && res.code !== 'NETWORK' && res.code !== 'SERVER_ERROR' && res.code !== 'STORAGE_ERROR') break
+      }
+      if (!res.ok) { this.set({ message: `The picture was not added: ${res.message ?? 'the server refused it'}. Nothing on the page changed.` }); return null }
+      onProgress?.(index + 1, count)
+      if (index === count - 1 && !res.complete) { this.set({ message: 'The picture was not added: the server did not confirm all of it. Nothing on the page changed.' }); return null }
+    }
+    return imageId
+  }
+
+  /** Reads a stored picture, or null if it is unavailable. */
+  async fetchImage(imageId: string): Promise<StoredPicture | null> {
+    const first = await this.call('nb_get_image', { imageId, index: 0 })
+    if (!first.ok) return null
+    const out = new Uint8Array(first.bytes)
+    let offset = 0
+    for (let index = 0; index < first.count; index++) {
+      const piece = index === 0 ? first : await this.call('nb_get_image', { imageId, index })
+      if (!piece.ok) return null
+      const chunk = unbase64(piece.data)
+      if (offset + chunk.length > out.length) return null
+      out.set(chunk, offset)
+      offset += chunk.length
+    }
+    return offset === out.length ? { bytes: out, mime: first.mime, width: first.width, height: first.height } : null
   }
 
   // ---- checkpoints ----

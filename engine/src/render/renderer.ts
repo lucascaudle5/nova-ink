@@ -2,7 +2,7 @@ import { strokeOutline } from '../core/geometry'
 import type { OutlineOptions } from '../core/geometry'
 import { DEFAULT_PAPER, displayColor, PAPER_COLORS, patternLayers } from '../core/paper'
 import type { Paper } from '../core/paper'
-import type { Camera, Stroke, StrokeStyle } from '../core/types'
+import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
 
 /** The subset of CanvasRenderingContext2D the renderer uses, so tests can supply a recording fake. */
 export interface Context2D {
@@ -33,6 +33,8 @@ export interface RendererOptions {
   /** Builds a fillable path from a flat outline polygon. In browsers: Path2D. */
   createPath: (outline: number[]) => unknown
   outline?: OutlineOptions
+  /** The decoded picture for an image placement (ImageBitmap, canvas, ...), or null while it is not available. */
+  imageSource?: (image: string) => unknown
 }
 
 export interface SceneStats { drawn: number; ms: number }
@@ -106,13 +108,46 @@ export class CanvasRenderer {
     ctx.globalAlpha = 1
   }
 
-  /** Redraws the base layer with the given (already culled) strokes, in order. */
-  drawScene(strokes: readonly Stroke[], camera: Camera, now: () => number = () => performance.now()): SceneStats {
+  /** Redraws the base layer: the given (already culled) images, then strokes on top, in order. */
+  drawScene(strokes: readonly Stroke[], camera: Camera, now: () => number = () => performance.now(), images: readonly ImageItem[] = []): SceneStats {
     const start = now()
     this.clear(this.ctx.base)
     this.applyCamera(this.ctx.base, camera)
+    for (const image of images) this.drawImageItem(this.ctx.base, image, camera)
     for (const stroke of strokes) this.fillStroke(this.ctx.base, stroke)
-    return { drawn: strokes.length, ms: now() - start }
+    return { drawn: strokes.length + images.length, ms: now() - start }
+  }
+
+  /** Selection frame and resize handle for one placement, on the live layer. */
+  drawSelection(image: { x: number; y: number; w: number; h: number }, camera: Camera, handlePx: number): void {
+    const live = this.ctx.live
+    this.clear(live)
+    live.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    const x = (image.x - camera.x) * camera.z, y = (image.y - camera.y) * camera.z
+    const w = image.w * camera.z, h = image.h * camera.z
+    live.globalAlpha = 1
+    live.fillStyle = '#1f6feb'
+    const t = 1.5
+    live.fillRect(x - t, y - t, w + 2 * t, t * 2); live.fillRect(x - t, y + h - t, w + 2 * t, t * 2)
+    live.fillRect(x - t, y - t, t * 2, h + 2 * t); live.fillRect(x + w - t, y - t, t * 2, h + 2 * t)
+    const s = handlePx
+    live.fillStyle = '#ffffff'
+    live.fillRect(x + w - s / 2 - 1.5, y + h - s / 2 - 1.5, s + 3, s + 3)
+    live.fillStyle = '#1f6feb'
+    live.fillRect(x + w - s / 2, y + h - s / 2, s, s)
+  }
+
+  private drawImageItem(ctx: Context2D, image: ImageItem, camera: Camera) {
+    const source = this.options.imageSource?.(image.image)
+    if (source) { ctx.drawImage(source as never, image.x, image.y, image.w, image.h); return }
+    // Not loaded (yet): a quiet placeholder of the right size, so the layout never jumps.
+    const dark = PAPER_COLORS[this.paperStyle.color].dark
+    ctx.fillStyle = dark ? 'rgba(255,255,255,.08)' : 'rgba(27,31,36,.06)'
+    ctx.fillRect(image.x, image.y, image.w, image.h)
+    ctx.fillStyle = dark ? 'rgba(255,255,255,.22)' : 'rgba(27,31,36,.18)'
+    const t = 1 / camera.z
+    ctx.fillRect(image.x, image.y, image.w, t); ctx.fillRect(image.x, image.y + image.h - t, image.w, t)
+    ctx.fillRect(image.x, image.y, t, image.h); ctx.fillRect(image.x + image.w - t, image.y, t, image.h)
   }
 
   /** Incremental: adds one committed stroke on top of the base layer. */

@@ -1,9 +1,10 @@
-import { serializeStroke } from './format'
-import type { SerializedStroke } from './format'
+import { serializeItem } from './format'
+import type { SerializedItem } from './format'
 import { keyBetween } from './order'
-import type { Stroke } from './types'
+import type { PageItem } from './types'
 
-export interface KeyedStroke { key: string; stroke: SerializedStroke }
+/** `stroke` holds any stored row (a stroke or an image placement); the name predates images. */
+export interface KeyedStroke { key: string; stroke: SerializedItem }
 
 /** What a save sends: strokes the server may not have (with their z-order keys) and ids it should drop. */
 export interface PageDelta {
@@ -33,13 +34,13 @@ export class PageSync {
   get size(): number { return this.acked.size }
 
   /** True when `strokes` differ from what the server is known to have. Cheap; changes no state. */
-  hasChanges(strokes: readonly Stroke[]): boolean {
+  hasChanges(strokes: readonly PageItem[]): boolean {
     if (this.unconfirmed.size || strokes.length !== this.acked.size) return true
     return strokes.some(s => !this.acked.has(s.id))
   }
 
-  /** Changes that make the server match `strokes` (in z-order). */
-  delta(strokes: readonly Stroke[]): PageDelta {
+  /** Changes that make the server match `strokes` (in z-order; images first, as they are under the ink). */
+  delta(strokes: readonly PageItem[]): PageDelta {
     // Stored strokes keep their keys as long as those keys still increase along the page.
     const fixed = new Array<string | null>(strokes.length).fill(null)
     let last: string | null = null
@@ -62,7 +63,7 @@ export class PageSync {
       const sent = this.unconfirmed.get(s.id)
       const key = sent !== undefined && (prev === null || sent > prev) && (upper === null || sent < upper) ? sent : keyBetween(prev, upper)
       target.set(s.id, key)
-      adds.push({ key, stroke: serializeStroke(s) })
+      adds.push({ key, stroke: serializeItem(s) })
       prev = key
     })
     const removes = [...new Set([...this.acked.keys(), ...this.unconfirmed.keys()])].filter(id => !target.has(id))
