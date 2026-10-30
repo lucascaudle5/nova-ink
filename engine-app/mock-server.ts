@@ -1,0 +1,144 @@
+/**
+ * In-memory stand-in for the nb_* tools, for tests and for previewing the app outside ChatGPT. It follows
+ * PageDO's order of save checks (replay, editing control, revision). Holds test data only, never saved anywhere.
+ */
+import type { Paper } from '../engine/src/core/paper'
+import type { Camera } from '../engine/src/core/types'
+import type { Data } from './session'
+
+type Lease = { clientId: string; until: number }
+type MockPage = {
+  notebookId: string; title: string; deletedAt: string | null; revision: number
+  rows: Map<string, { key: string; stroke: unknown }>; paper: Paper; camera: Camera | null
+  lease: Lease | null; last: { saveId: string; clientId: string; revision: number } | null
+}
+type MockNotebook = { id: string; name: string; deletedAt: string | null }
+
+const LEASE_MS = 45_000
+const DEFAULT_PAPER: Paper = { color: 'white', pattern: 'blank' }
+
+export class MockServer {
+  notebooks: MockNotebook[] = []
+  pages = new Map<string, MockPage>()
+  last: { notebookId: string; pageId: string } | null = null
+  now = 0
+  offline = false
+  dropNextReply = false
+  latencyMs = 0
+  calls: string[] = []
+  private n = 0
+
+  constructor(options: { clock?: () => number } = {}) {
+    if (options.clock) Object.defineProperty(this, 'now', { get: options.clock })
+    const notebookId = this.id()
+    this.notebooks.push({ id: notebookId, name: 'My Notebook', deletedAt: null })
+    this.addPage(notebookId, 'Page 1')
+  }
+
+  id() { return `00000000-0000-4000-8000-${String(++this.n).padStart(12, '0')}` }
+  get first(): string { return [...this.pages.keys()][0] }
+  get notebookId(): string { return this.notebooks[0].id }
+
+  addPage(notebookId: string, title: string, paper: Paper = DEFAULT_PAPER, afterPageId?: string | null): string {
+    const id = this.id()
+    const page: MockPage = { notebookId, title, deletedAt: null, revision: 0, rows: new Map(), paper: { ...paper }, camera: null, lease: null, last: null }
+    const entries = [...this.pages]
+    const at = afterPageId ? entries.findIndex(([key]) => key === afterPageId) : -1
+    if (at < 0) this.pages.set(id, page)
+    else this.pages = new Map([...entries.slice(0, at + 1), [id, page], ...entries.slice(at + 1)])
+    return id
+  }
+
+  api = async (name: string, args: Record<string, unknown>): Promise<Data> => {
+    this.calls.push(name)
+    if (this.latencyMs) await new Promise(resolve => setTimeout(resolve, this.latencyMs))
+    if (this.offline) throw new Error('offline')
+    const result = this.handle(name, args as any)
+    if (name === 'nb_save_page' && this.dropNextReply) { this.dropNextReply = false; throw new Error('connection reset') }
+    return structuredClone(result)
+  }
+
+  private lease(p: MockPage, clientId: string, takeOver = false): boolean {
+    if (p.lease && p.lease.clientId !== clientId && p.lease.until > this.now && !takeOver) return true
+    p.lease = { clientId, until: this.now + LEASE_MS }
+    return false
+  }
+
+  private meta(id: string, p: MockPage) {
+    const book = this.notebooks.find(n => n.id === p.notebookId)
+    return { id, notebookId: p.notebookId, title: p.title, revision: p.revision, deletedAt: p.deletedAt ?? book?.deletedAt ?? null }
+  }
+
+  private handle(name: string, a: any): Data {
+    const ok = (extra: Record<string, unknown> = {}): Data => ({ ok: true, ...extra })
+    const missing = (): Data => ({ ok: false, code: 'NOT_FOUND', message: 'That notebook or page was not found.' })
+    const book = this.notebooks.find(n => n.id === a.notebookId)
+    switch (name) {
+      case 'nb_list': {
+        const notebooks = this.notebooks.map(n => ({ ...n, pages: [...this.pages].filter(([, p]) => p.notebookId === n.id).map(([id, p]) => this.meta(id, p)) }))
+        const live = notebooks.find(n => n.id === this.last?.notebookId && !n.deletedAt) ?? notebooks.find(n => !n.deletedAt)
+        const page = live?.pages.find(p => p.id === this.last?.pageId && !p.deletedAt) ?? live?.pages.find(p => !p.deletedAt)
+        return ok({ notebooks, last: { notebookId: live?.id ?? null, pageId: page?.id ?? null } })
+      }
+      case 'nb_create_notebook': {
+        const id = this.id()
+        this.notebooks.push({ id, name: a.name, deletedAt: null })
+        return ok({ notebookId: id, pageId: this.addPage(id, 'Page 1') })
+      }
+      case 'nb_rename_notebook': if (!book) return missing(); book.name = a.name; return ok()
+      case 'nb_remove_notebook':
+        if (!book) return missing()
+        if (this.notebooks.filter(n => !n.deletedAt).length <= 1 && !book.deletedAt) return { ok: false, code: 'LAST_NOTEBOOK', message: 'Keep at least one notebook. Create another before removing this one.' }
+        book.deletedAt = new Date().toISOString(); return ok()
+      case 'nb_restore_notebook': if (!book) return missing(); book.deletedAt = null; return ok()
+      case 'nb_add_page': {
+        if (!book) return missing()
+        const live = [...this.pages].filter(([, p]) => p.notebookId === book.id && !p.deletedAt)
+        const previous = a.afterPageId ? this.pages.get(a.afterPageId) : live.at(-1)?.[1]
+        const pageId = this.addPage(book.id, a.title ?? `Page ${live.length + 1}`, previous?.paper, a.afterPageId)
+        return ok({ pageId, previousPageId: a.afterPageId ?? live.at(-1)?.[0] ?? null })
+      }
+    }
+    const p = this.pages.get(a.pageId)
+    if (!p) return missing()
+    const trashed = !!(p.deletedAt || this.notebooks.find(n => n.id === p.notebookId)?.deletedAt)
+    const inTrash = (): Data => ({ ok: false, code: 'IN_TRASH', message: 'That page is in the trash. Restore it before editing.' })
+    switch (name) {
+      case 'nb_rename_page': p.title = a.title; return ok()
+      case 'nb_move_page': return ok()
+      case 'nb_remove_page': p.deletedAt = new Date().toISOString(); return ok()
+      case 'nb_restore_page': {
+        p.deletedAt = null
+        const owner = this.notebooks.find(n => n.id === p.notebookId)
+        if (owner) owner.deletedAt = null
+        return ok()
+      }
+      case 'nb_open_page': {
+        if (trashed) return inTrash()
+        const readOnly = this.lease(p, a.clientId, a.takeOver)
+        this.last = { notebookId: p.notebookId, pageId: a.pageId }
+        const rows = [...p.rows.values()].sort((x, y) => x.key < y.key ? -1 : x.key > y.key ? 1 : 0)
+        return ok({ revision: p.revision, rows: JSON.stringify(rows), strokeCount: rows.length, paper: p.paper, camera: p.camera, readOnly, page: this.meta(a.pageId, p) })
+      }
+      case 'nb_heartbeat': return ok({ readOnly: this.lease(p, a.clientId) })
+      case 'nb_release': if (p.lease?.clientId === a.clientId) p.lease = null; return ok()
+      case 'nb_list_checkpoints': return ok({ checkpoints: [] })
+      case 'nb_restore_checkpoint': return { ok: false, code: 'BACKUP_UNAVAILABLE', message: 'The preview server keeps no checkpoints.' }
+      case 'nb_save_page': {
+        if (trashed) return inTrash()
+        if (p.last && p.last.saveId === a.saveId && p.last.clientId === a.clientId) return ok({ replayed: true, revision: p.last.revision, savedAt: new Date().toISOString() })
+        if (p.lease && p.lease.clientId !== a.clientId && p.lease.until > this.now) return { ok: false, code: 'LEASE_HELD', message: 'Another device is editing this page.' }
+        if (a.baseRevision !== p.revision) return { ok: false, code: 'CONFLICT', message: 'This page has a newer version.', revision: p.revision, ...(p.last && p.last.clientId === a.clientId ? { ownLastSaveId: p.last.saveId } : {}) }
+        for (const id of a.removes ?? []) p.rows.delete(id)
+        for (const add of a.adds ?? []) p.rows.set((add.stroke as { id: string }).id, add)
+        if (a.paper) p.paper = a.paper
+        if (a.camera) p.camera = a.camera
+        p.revision++
+        p.last = { saveId: a.saveId, clientId: a.clientId, revision: p.revision }
+        this.lease(p, a.clientId)
+        return ok({ revision: p.revision, savedAt: new Date().toISOString(), strokeCount: p.rows.size })
+      }
+    }
+    return { ok: false, code: 'INVALID_REQUEST', message: `Unknown tool ${name}` }
+  }
+}

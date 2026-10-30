@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#fbfaf7" />
+    <title>NOVA Ink</title>
+  </head>
+  <body>
+    <main id="surface"></main>
+
+    <nav class="pagesbar floating" aria-label="Notebook">
+      <button id="pages-button" class="pages-button" title="Notebooks and pages" aria-label="Notebooks and pages" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /></svg>
+        <span id="page-title" class="page-title">NOVA Ink</span>
+      </button>
+      <button id="prev-page" title="Previous page" aria-label="Previous page">
+        <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+      </button>
+      <button id="next-page" title="Next page" aria-label="Next page">
+        <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+      </button>
+    </nav>
+
+    <nav class="toolbar floating" aria-label="Drawing tools">
+      <button data-tool="pen" class="tool active" title="Pen" aria-label="Pen">
+        <svg viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></svg>
+      </button>
+      <button data-tool="eraser" class="tool" title="Eraser (tap again for size and mode)" aria-label="Eraser" data-popover-anchor>
+        <svg viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></svg>
+      </button>
+      <span class="sep"></span>
+      <span id="width-slots" class="slots" title="Tap a width to use it; tap it again to change it." data-popover-anchor></span>
+      <span class="sep"></span>
+      <span id="color-slots" class="slots" title="Tap a color to use it; tap it again to change it." data-popover-anchor></span>
+      <span class="sep"></span>
+      <button id="undo" title="Undo" aria-label="Undo">
+        <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+      </button>
+      <button id="redo" title="Redo" aria-label="Redo">
+        <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" /></svg>
+      </button>
+    </nav>
+
+    <nav class="corner floating" aria-label="View">
+      <button id="page" title="Page style" aria-label="Page style" data-popover-anchor>
+        <svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M4 9h16M4 15h16M10 3v18" /></svg>
+      </button>
+      <button id="menu-button" title="More" aria-label="More" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>
+      </button>
+    </nav>
+
+    <nav class="zoombar floating" aria-label="Zoom">
+      <button id="zoom-out" title="Zoom out (Ctrl −)" aria-label="Zoom out">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
+      </button>
+      <button id="zoom-reset" class="zoom-label" title="Zoom to 100% (Ctrl 0)" aria-label="Zoom to 100%">100%</button>
+      <button id="zoom-in" title="Zoom in (Ctrl +)" aria-label="Zoom in">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14" /></svg>
+      </button>
+      <span class="sep"></span>
+      <button id="fit" title="Fit all ink" aria-label="Fit all ink">
+        <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
+      </button>
+    </nav>
+
+    <aside id="pages" class="pages panel" hidden aria-label="Notebooks and pages"></aside>
+    <div id="menu" class="menu panel" hidden></div>
+
+    <footer class="status" aria-live="polite">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Connecting…</span>
+      <span id="status-actions" class="actions"></span>
+    </footer>
+
+    <div id="preset-editor" class="popover panel" hidden></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

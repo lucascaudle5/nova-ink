@@ -62,6 +62,8 @@ export const PEN_QUIET_MS = 400
  */
 export class InputController {
   tool: Tool = 'pen'
+  /** Pen and mouse do nothing (fingers still navigate), e.g. while another device edits the page. */
+  readOnly = false
   /** Eraser radius in screen pixels, so it feels the same at every zoom. */
   eraserRadiusPx: number
   private inkPointer: number | null = null
@@ -90,7 +92,7 @@ export class InputController {
     const { phase, id, samples } = event
     if (samples.length && (phase === 'down' ? this.inkPointer === null : id === this.inkPointer)) this.lastInkT = samples[samples.length - 1].t
     if (phase === 'down') {
-      if (this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
+      if (this.readOnly || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
       for (const touchId of this.touches.keys()) this.ignored.add(touchId)
       this.touches.clear()
       this.gesture = null

@@ -113,7 +113,7 @@ Submit time is small; the cost is GPU/compositor rasterization of thousands of f
 3. **Engine plugin:** its own notebook storage on Cloudflare (plan below), served as a separate ChatGPT app. The tldraw plugin keeps working unchanged; the user tests each plugin separately.
 4. **Parity on iPad, then switch.** No converter: the user decided old tldraw notes need no compatibility. Old data is left in place (not deleted) unless the user explicitly asks. tldraw is removed only after the engine plugin is accepted.
 
-### Engine storage plan: Cloudflare (user decision October 29, 2026, 8:50 PM; not built)
+### Engine storage plan: Cloudflare (user decision October 29, 2026, 8:50 PM; steps 1–5 built locally, not deployed)
 
 Supersedes the earlier Windows-folder plan (same day, 8:40 PM). Kept from it: notebooks hold several pages; each page is its own infinite canvas; paper is per page and a new page copies the previous page's paper; engine data is fully separate from tldraw data, which is never read, migrated or deleted.
 
@@ -121,7 +121,7 @@ Why Cloudflare suits the engine better than it suited tldraw: strokes never chan
 
 **Shape**
 - A new Worker, `nova-ink-engine`, separate from anything tldraw. Its code lives in `cloudflare/` next to the old spike (second wrangler config and entry point) so it reuses the tested sign-in code: OAuth provider for ChatGPT, Cloudflare Access login with only the allowed email, fail closed when any secret is missing (`app.ts`, `access.ts`, `config.ts` and their 36 tests). It imports the engine's format code from `engine/`; `engine/` never imports anything back.
-- **Library object** (one per user, `library:<userId>`): notebooks (id, name, order, deleted_at) and pages (id, notebook, title, fractional order key, paper, deleted_at). Removing a page or notebook sets deleted_at (trash, restorable); nothing is destroyed at delete time. A page object that exists but is in no notebook shows up in "Recovered pages". Every page id is checked against the caller's library (`NOT_FOUND` otherwise), as in the spike.
+- **Library object** (one per user, `engine-library:<userId>`): notebooks (id, name, order, deleted_at) and pages (id, notebook, title, fractional order key, last known revision, deleted_at). Removing a page or notebook sets deleted_at (trash, restorable); nothing is destroyed at delete time. Every page id is checked against the caller's library (`NOT_FOUND` otherwise), as in the spike. As built, "Recovered pages" was dropped: a page is registered in the library before its page object exists, so the library is the only index and there is no orphan to recover. Paper lives in the page object; a new page's object is initialised with the previous page's paper.
 - **Page object** (one per page, SQLite, `WITHOUT ROWID` tables): `strokes` (id, order key, serialized stroke as in the `nova-ink` v1 format); `head` (format version, revision, saveId, savedBy, savedAt, stroke count); `meta` (paper, camera); lease; gzip checkpoints. A format version newer than the code is refused (`FORMAT_NEWER`), like today.
 
 **Save protocol** (same order of checks as `storage.mjs` and the spike's `CanvasDO`)
@@ -145,11 +145,19 @@ Why Cloudflare suits the engine better than it suited tldraw: strokes never chan
 4. Engine Worker: sign-in reused, MCP tools and widget resource, end-to-end tests with fake Access.
 5. Widget: the harness drawing surface inside a ChatGPT app UI (outside `engine/`), with a save queue, Saved/Not synced, lease handling and page tabs; desktop-tested.
 6. **Needs the user's go-ahead:** deploy `nova-ink-engine`, add it in ChatGPT as a connector, run the sign-in, refresh, CPU and iPad checks.
-7. Export to the PC.
+7. Export to the PC (optional; the user is open to it but has not decided).
+
+**As built (October 29, 2026, evening; local only, nothing deployed):**
+- Step 1: `engine/src/core/format.ts` `parseStroke`, `engine/src/core/order.ts` (order keys), `engine/src/core/sync.ts` `PageSync` (which strokes to send; tracks unconfirmed sends so a lost acknowledgement cannot duplicate or orphan rows). Engine read-only mode: `InkSurface.readOnly` (pen and mouse do nothing, undo/redo refused, fingers still navigate).
+- Steps 2–4: `cloudflare/src/engine/` (`page-do.ts`, `library-do.ts`, `mcp.ts`, `index.ts`), config `cloudflare/wrangler.engine.jsonc`, tests `cloudflare/test/engine/` (`npm run test:engine`).
+- Step 5: `engine-app/` at the repo root. `session.ts` is the DOM-free session (Saved only after the server confirms; Not synced and retries 2/5/10/20/30 s on failure, with the same saveId so the server replays rather than applies twice; one save in flight; autosave 650 ms, camera 3 s quietly; 15 s heartbeat; take over; conflict, damaged, trash and lost-control states never overwrite, and "Copy to a new page" keeps the work). `main.ts` wires it to `InkSurface`, the harness toolbar (`engine/harness/tools.ts`), a notebooks/pages panel with trash, page arrows, status pill and a More menu with checkpoints. `npm run build:engine-app` makes one 322 KB file (`engine-app/dist/notebook.html`); `npm run engine-widget` in `cloudflare/` embeds it in the Worker. Opened outside ChatGPT (or with `?mock`), it runs on an in-memory preview server (`mock-server.ts`) for desktop testing.
+- Verified: engine 66/66; engine-app 8/8 (session against the mock server) and `tsc` clean; cloudflare engine suite 27/27 in workerd, including the app's own session code driving the real Worker and Durable Objects through the MCP tools (save, lost reply, hand-over between two devices, copy to a new page, pages, trash, notebooks); old cloudflare suite 70/70; root 76/76. Desktop Chromium preview: drawing, autosave to Saved, new page, page arrows, offline Not synced and refusal to leave the page, recovery after reconnect, another device holding the page, take over, revision conflict and Copy to a new page, More menu; layout checked at 1180×820 and 700×560.
+- Not verified: anything inside ChatGPT (host bridge, display modes, safe areas, teardown), on the iPad, on real Cloudflare, or checkpoint restore through the UI.
+- Known gap (same as v0.2's CanvasDO): a damaged stroke row is detected when the page is opened, not when saving; the app then offers checkpoints instead of loading part of the page.
 
 ## 9. Known gaps (not built)
 
-Read-only mode and `EditorPort` adapter; viewport PNG export and shape context for Ask NOVA; tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms; images and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; running inside ChatGPT.
+Viewport PNG export and shape context for Ask NOVA; tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms; images and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; page reordering in the app UI (the server tool exists); verified running inside ChatGPT.
 
 ## 10. Open decisions for the product owner
 

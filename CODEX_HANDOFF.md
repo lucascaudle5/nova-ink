@@ -169,12 +169,15 @@ Cloudflare test deployment taken down (October 29, 2026, ~8:55 PM, user's decisi
 - I deleted the `nova-ink-test` Access for SaaS app in the Zero Trust dashboard on the user's request (confirmed gone from the Applications list).
 - Kept: the account, Zero Trust team `nova-dev`, the "NOVA Owner" policy, the `workers.dev` subdomain. Also still present and untouched: an Access app named "New SaaS application" on team domain `dark-tooth-ec30`, with no policy; its origin is unknown.
 
+Engine notebook built locally (October 29, 2026, evening; user: "Yes, start building it"): build steps 1–5 of the Cloudflare plan are done and committed on engine/spike; nothing is deployed. Worker `cloudflare/src/engine/` with tests `cloudflare/test/engine/`; ChatGPT notebook app `engine-app/` (root scripts `build:engine-app`, `test:engine-app`, `dev:engine-app`). What was verified, and where, is listed in ENGINE_ARCHITECTURE.md "As built". Verified by automated tests and a desktop Chromium preview only; not inside ChatGPT, not on the iPad, not on real Cloudflare.
+
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
 2. (Decided above: engine storage plan.)
 3. Local device drafts (IndexedDB) for crash recovery, given decision 3 defers durable offline support.
-4. The engine plugin in ChatGPT: a separate dev-only MCP server/connector changes the plugin/tunnel setup; confirm before it is set up.
+4. Deploying (build step 6): the user offered browser control for the ChatGPT connector setup; the deploy itself (KV namespace, Worker, Access app, secrets) is confirmed with the user right before it happens. It is a new Cloudflare Worker and a new ChatGPT connector; the v0.2.3 tunnel and tldraw plugin are not changed.
 5. (Decided: the Cloudflare test deployment was taken down October 29, 2026, see above.)
+6. Export of engine notebooks to the PC (build step 7): the user is open to it but undecided; not built.
 
 Next engine milestone (bounded): (a) the user tries the partial eraser, undo (buttons and finger taps), zoom bar and paper styles on the iPad, and runs Benchmark pan zoomed out with +3,000 strokes, then exports Results; (b) record the numbers here; (c) if undo is still wrong, reproduce it from the user's description; (d) then stroke-relative coordinates for the infinite canvas.
 

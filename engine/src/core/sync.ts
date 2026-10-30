@@ -32,6 +32,12 @@ export class PageSync {
 
   get size(): number { return this.acked.size }
 
+  /** True when `strokes` differ from what the server is known to have. Cheap; changes no state. */
+  hasChanges(strokes: readonly Stroke[]): boolean {
+    if (this.unconfirmed.size || strokes.length !== this.acked.size) return true
+    return strokes.some(s => !this.acked.has(s.id))
+  }
+
   /** Changes that make the server match `strokes` (in z-order). */
   delta(strokes: readonly Stroke[]): PageDelta {
     // Stored strokes keep their keys as long as those keys still increase along the page.

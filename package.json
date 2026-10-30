@@ -14,7 +14,10 @@
     "typecheck:watch": "tsc --noEmit --watch",
     "build:host-test": "node scripts/build-host-test.mjs",
     "backup": "node scripts/backup-data.mjs",
-    "restore": "node scripts/restore-data.mjs"
+    "restore": "node scripts/restore-data.mjs",
+    "dev:engine-app": "vite -c engine-app/vite.config.ts",
+    "build:engine-app": "tsc -p engine-app && vite build -c engine-app/vite.config.ts",
+    "test:engine-app": "node --import tsx --test --test-force-exit engine-app/test/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

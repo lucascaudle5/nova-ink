@@ -181,8 +181,16 @@ export class InkSurface {
     return () => { this.listeners.delete(listener) }
   }
 
-  undo(): boolean { const done = this.history.undo(); this.notify(); return done }
-  redo(): boolean { const done = this.history.redo(); this.notify(); return done }
+  /** No drawing, erasing, undo or redo; fingers still pan and zoom. */
+  get readOnly(): boolean { return this.input.readOnly }
+  set readOnly(value: boolean) {
+    if (value && this.live) { this.live = null; this.needsLive = true; this.schedule() }
+    this.input.readOnly = value
+    this.notify()
+  }
+
+  undo(): boolean { if (this.readOnly) return false; const done = this.history.undo(); this.notify(); return done }
+  redo(): boolean { if (this.readOnly) return false; const done = this.history.redo(); this.notify(); return done }
 
   /** Replaces the page contents. Not undoable. */
   load(strokes: readonly Stroke[]): void {

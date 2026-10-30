@@ -47,6 +47,18 @@ test('fingers never draw: one finger pans', () => {
   assert.deepEqual(state.camera, { x: -30, y: 20, z: 1 })
 })
 
+test('read-only: pen and mouse do nothing, fingers still pan', () => {
+  const { input, send, log, points, state } = rig()
+  input.readOnly = true
+  send('down', 'pen', 1, [10, 10]); send('move', 'pen', 1, [20, 20]); send('up', 'pen', 1, [20, 20])
+  input.tool = 'eraser'
+  send('down', 'mouse', 2, [10, 10]); send('up', 'mouse', 2, [10, 10])
+  assert.equal(points.length, 0)
+  assert.deepEqual(log, [])
+  send('down', 'touch', 7, [100, 100]); send('move', 'touch', 7, [130, 100]); send('up', 'touch', 7, [130, 100])
+  assert.deepEqual(state.camera, { x: -30, y: 0, z: 1 })
+})
+
 test('two fingers pinch-zoom; lifting one finger continues as a pan without a jump', () => {
   const { send, state } = rig()
   send('down', 'touch', 1, [100, 100])
