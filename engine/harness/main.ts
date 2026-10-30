@@ -14,6 +14,9 @@ const stats = $<HTMLElement>('stats')
 let benchText = ''
 let draftTimer: ReturnType<typeof setTimeout> | null = null
 let draftRevision = -1
+// Metrics cover only this page load; a reload restores strokes but starts metrics from zero.
+const sessionStartedAt = new Date().toISOString()
+let restoredStrokes = 0
 
 function setDraft(text: string, bad = false) {
   draftLabel.textContent = text
@@ -31,6 +34,7 @@ function restoreDraft() {
   surface.load(result.strokes)
   surface.fitToContent()
   draftRevision = surface.doc.revision
+  restoredStrokes = result.strokes.length
   setDraft(`Restored local draft (${result.strokes.length} strokes)`)
 }
 
@@ -104,6 +108,7 @@ $('results').addEventListener('click', () => {
   const m = surface.metrics
   download('nova-ink-engine-results', {
     recordedAt: new Date().toISOString(),
+    session: { startedAt: sessionStartedAt, restoredFromDraft: restoredStrokes },
     userAgent: navigator.userAgent,
     screen: { width: screen.width, height: screen.height },
     capabilities: surface.capabilities(),

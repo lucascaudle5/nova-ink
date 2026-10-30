@@ -124,6 +124,12 @@ Engine decisions (user, October 29, 2026, 7:19 PM):
 - Infinite canvas, not fixed pages.
 - No compatibility between old tldraw notes and the new engine: no converter, and engine pages do not need to fit the tldraw snapshot envelope. The user does not need the old notes. This is not an instruction to delete them: existing data in %LOCALAPPDATA%\NOVA-Ink\data and the v0.2.3 app stay untouched; deleting them still needs an explicit request.
 
+First iPad Safari Results file (user, October 29, 2026, 7:26 PM, over Wi-Fi):
+- Safari 18.5 in iPad desktop mode (the user agent says Macintosh); 810 × 1080 CSS screen, devicePixelRatio 2. The exact iPad and Pencil models were not reported.
+- `getCoalescedEvents` is **not available**; `getPredictedEvents` and `altitudeAngle` are. Without coalesced events the engine receives one Pencil sample per event, not the full hardware rate.
+- That page session recorded no pointer events, no input latency and no pan benchmark (probably drawn before a reload; metrics restart on reload). Two full redraws of 3,003 strokes took 23 and 89 ms (the larger includes building every stroke's path once). Results now include session start and restored-draft count.
+- Not yet measured on iPad: Pencil latency, pressure, samples per event, palm rejection, pan frame rate.
+
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
 2. Where engine pages are stored: a new store/format alongside v0.2.3 (no migration needed, per the decision above). Plan it before building; it still must not alter v0.2.3 data.
