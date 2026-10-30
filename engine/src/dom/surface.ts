@@ -202,6 +202,28 @@ export class InkSurface {
     return item
   }
 
+  /**
+   * Places stored pictures (sizes in page units) in a column, `gap` apart, centred on the view horizontally and
+   * starting near its top, as one undoable step; then moves the view to the first one. For imported PDF pages.
+   */
+  insertImageColumn(pages: readonly { image: string; w: number; h: number }[], gap = 32): ImageItem[] {
+    if (this.readOnly || !pages.length) return []
+    const z = this.camera.z
+    const cx = this.camera.x + this.widthCss / 2 / z
+    let y = this.camera.y + 24 / z
+    const items = pages.map(p => {
+      const item = createImage({ image: p.image, x: cx - p.w / 2, y, w: p.w, h: p.h })
+      y += p.h + gap
+      return item
+    })
+    this.history.insertImages(items)
+    this.select(null)
+    const first = items[0]
+    this.animateCamera(fitBounds({ minX: first.x, minY: first.y, maxX: first.x + first.w, maxY: first.y + first.h }, this.widthCss, this.heightCss))
+    this.notify()
+    return items
+  }
+
   deleteSelectedImage(): boolean {
     const id = this.selected
     if (!id || this.readOnly) return false

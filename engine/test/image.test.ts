@@ -61,6 +61,20 @@ test('insert, move and delete are undoable steps; a move keeps the stacking posi
   assert.equal(doc.images.length, 0)
 })
 
+test('the pages of an imported PDF go in and come out as one undo step', () => {
+  const doc = new InkDocument(), history = new History(doc)
+  history.insertImage(photo('before'))
+  history.insertImages([photo('p1', 0, 0), photo('p2', 0, 332), photo('p3', 0, 664)])
+  assert.deepEqual(doc.images.map(i => i.id), ['before', 'p1', 'p2', 'p3'])
+  history.undo()
+  assert.deepEqual(doc.images.map(i => i.id), ['before'])
+  history.redo()
+  assert.deepEqual(doc.images.map(i => i.id), ['before', 'p1', 'p2', 'p3'])
+  history.insertImages([])
+  history.undo(); history.undo()
+  assert.equal(doc.images.length, 0)
+})
+
 test('dragging: move offsets; resize keeps the aspect ratio and a minimum size', () => {
   const r = { x: 10, y: 20, w: 400, h: 200 }
   assert.deepEqual(dragRect(r, 'move', { x: 0, y: 0 }, { x: 5, y: -7 }), { x: 15, y: 13, w: 400, h: 200 })

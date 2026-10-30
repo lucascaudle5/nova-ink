@@ -50,6 +50,14 @@ export class History {
     this.record({ kind: 'image', before: null, after: image })
   }
 
+  /** Inserts pictures as one undo step (the pages of one imported PDF). */
+  insertImages(images: readonly ImageItem[]): void {
+    if (!images.length) return
+    for (const image of images) this.doc.addImage(image)
+    const commands: Command[] = images.map(after => ({ kind: 'image', before: null, after }))
+    this.record(commands.length === 1 ? commands[0] : { kind: 'group', commands })
+  }
+
   deleteImage(id: string): boolean {
     const before = this.doc.removeImage(id)
     if (before) this.record({ kind: 'image', before, after: null })

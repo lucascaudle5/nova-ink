@@ -5,6 +5,7 @@ test/fixtures/*.json
 .tmp
 src/widget.generated.ts
 src/engine/widget.generated.ts
+src/engine/pdfjs.generated.ts
 .dev.vars
 .dev.vars.*
 .env

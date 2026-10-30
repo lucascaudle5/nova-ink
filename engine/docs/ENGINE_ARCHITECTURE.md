@@ -155,9 +155,11 @@ Why Cloudflare suits the engine better than it suited tldraw: strokes never chan
 - Not verified: anything inside ChatGPT (host bridge, display modes, safe areas, teardown), on the iPad, on real Cloudflare, or checkpoint restore through the UI.
 - Known gap (same as v0.2's CanvasDO): a damaged stroke row is detected when the page is opened, not when saving; the app then offers checkpoints instead of loading part of the page.
 
+**Pictures and PDF pages (built, not deployed):** `core/image.ts` (`ImageItem`: a stored picture id plus a page-unit rectangle; immutable, a move or resize replaces it with a new id), images held in `InkDocument` below all ink, history commands for insert/delete/replace and `insertImages` (one step), `format.ts` `parseItem`/`serializeItem` for mixed rows, `PageSync` over `PageItem[]` (images sent first), renderer `imageSource` with a placeholder box while loading, `select` tool in `InputController`. `InkSurface.insertImage` fits a picture into 60% of the view; `insertImageColumn` stacks PDF pages. The engine never decodes files or fetches anything: the app (`engine-app/main.ts`, `engine-app/pdf.ts`) prepares pictures, uploads them in pieces and supplies decoded bitmaps.
+
 ## 9. Known gaps (not built)
 
-Viewport PNG export and shape context for Ask NOVA; tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms; images and PDF backgrounds; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; page reordering in the app UI (the server tool exists); verified running inside ChatGPT.
+Viewport PNG export and shape context for Ask NOVA; tiles / level of detail for ink (the gesture snapshot covers pans and pinches only); spatial index (linear culling is ~0.02 ms at 3,000 strokes, so not needed yet); lasso selection and transforms of ink; picture rotation and cropping; predicted-event rendering; IndexedDB drafts; WebGL renderer; stroke-relative coordinates for the infinite canvas; page reordering in the app UI (the server tool exists); verified running inside ChatGPT.
 
 ## 10. Open decisions for the product owner
 

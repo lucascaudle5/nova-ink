@@ -17,10 +17,13 @@ import { ENGINE_WIDGET_HTML } from './widget.generated'
 export const ENGINE_VERSION = '0.3.0-engine'
 export const ENGINE_UI_URI = 'ui://nova-ink-engine/notebook'
 const TOUCH_EVERY_MS = 60_000
+/** Replaced in the served notebook with this Worker's origin, where it loads pdf.js from (see index.ts). */
+export const ASSET_ORIGIN_MARK = '__NOVA_ASSET_ORIGIN__'
 
 export interface EngineEnv {
   PAGE: DurableObjectNamespace<PageDO>
   ENGINE_LIBRARY: DurableObjectNamespace<NotebookLibraryDO>
+  PUBLIC_ORIGIN?: string
 }
 
 type Data = Record<string, any> & { ok: boolean }
@@ -43,6 +46,7 @@ const lastTouch = new Map<string, number>()
 export function createEngineServer(ctx: ServerContext): McpServer {
   const env = ctx.env as EngineEnv
   const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION })
+  const assetOrigin = (() => { try { return new URL(String(env.PUBLIC_ORIGIN)).origin } catch { return '' } })()
   const library = () => env.ENGINE_LIBRARY.get(env.ENGINE_LIBRARY.idFromName(`engine-library:${ctx.userId}`)) as any
   const page = (id: string) => env.PAGE.get(env.PAGE.idFromName(`page:${id}`)) as any
   const notFound = (): Data => ({ ok: false, code: 'NOT_FOUND', message: 'That page was not found.' })
@@ -187,8 +191,8 @@ export function createEngineServer(ctx: ServerContext): McpServer {
       contents: [{
         uri: ENGINE_UI_URI,
         mimeType: RESOURCE_MIME_TYPE,
-        text: ENGINE_WIDGET_HTML,
-        _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'fullscreen' }, ui: { csp: { resourceDomains: [], connectDomains: [] } } },
+        text: ENGINE_WIDGET_HTML.replaceAll(ASSET_ORIGIN_MARK, assetOrigin),
+        _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'fullscreen' }, ui: { csp: { resourceDomains: assetOrigin ? [assetOrigin] : [], connectDomains: [] } } },
       }],
     }
   })

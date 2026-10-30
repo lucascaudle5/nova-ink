@@ -4,7 +4,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import { keyBetween } from '../../../engine/src/core/order'
-import { call, E, rpc, signIn, strokeData, tool } from './helpers'
+import { servePdfjs } from '../../src/engine/index'
+import { PDFJS_FILES } from '../../src/engine/pdfjs.generated'
+import { call, E, ORIGIN, rpc, signIn, strokeData, tool } from './helpers'
 
 describe('engine Worker sign-in and configuration', () => {
   it('reports its name on /health and refuses /mcp without a token', async () => {
@@ -40,7 +42,24 @@ describe('engine tools', () => {
       else expect(t._meta.ui.visibility, t.name).toEqual(['app'])
     }
     const resource = await rpc(token, 'resources/read', { uri: 'ui://nova-ink-engine/notebook' })
-    expect(resource.body.result.contents[0].text).toMatch(/<(!doctype|html)/i)
+    const content = resource.body.result.contents[0]
+    expect(content.text).toMatch(/<(!doctype|html)/i)
+    expect(content.text).not.toContain('__NOVA_ASSET_ORIGIN__')
+    expect(content._meta.ui.csp).toEqual({ resourceDomains: [ORIGIN], connectDomains: [] })
+  })
+
+  it('serves pdf.js (public library code) for PDF import without sign-in, and nothing else under /assets/pdfjs/', async () => {
+    const url = (name: string) => `${ORIGIN}/assets/pdfjs/${name}`
+    expect(Object.keys(PDFJS_FILES).sort()).toEqual(['pdf.min.mjs', 'pdf.worker.min.mjs'])
+    const r = servePdfjs(new Request(url('pdf.min.mjs')))!
+    expect(r.status).toBe(200)
+    expect(r.headers.get('content-type')).toMatch(/^text\/javascript/)
+    expect(r.headers.get('access-control-allow-origin')).toBe('*')
+    expect(await r.text()).toBe(PDFJS_FILES['pdf.min.mjs'])
+    expect(servePdfjs(new Request(url('index.ts')))!.status).toBe(404)
+    expect(servePdfjs(new Request(url('pdf.mjs')))!.status).toBe(404)
+    expect(servePdfjs(new Request(url('pdf.min.mjs'), { method: 'POST' }))!.status).toBe(404)
+    expect(servePdfjs(new Request(`${ORIGIN}/mcp`))).toBeNull()
   })
 
   it('a whole session: list, open, save a delta, reopen, new page copies paper, trash and restore', async () => {

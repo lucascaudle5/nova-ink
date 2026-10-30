@@ -5,6 +5,8 @@ import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
 import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MockServer } from './mock-server'
+import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES } from './pdf'
+import type { PdfDocument, RenderedPdfPage } from './pdf'
 import { NotebookSession } from './session'
 import type { Api, Data, FolderInfo, NotebookInfo, PageEditor, PageInfo, SessionState, Status } from './session'
 import '../engine/harness/harness.css'
@@ -145,10 +147,63 @@ async function preparePicture(file: File): Promise<{ bitmap: ImageBitmap; bytes:
   return { bitmap, bytes: new Uint8Array(await blob.arrayBuffer()), mime: blob.type || 'image/jpeg' }
 }
 
+/** JPEG bytes of a rendered PDF page, plus a bitmap for drawing it right away. */
+async function encodePage(canvas: HTMLCanvasElement): Promise<{ bitmap: ImageBitmap; bytes: Uint8Array; mime: string }> {
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  if (!blob) throw new Error('This browser could not encode the page.')
+  return { bitmap: await createImageBitmap(canvas), bytes: new Uint8Array(await blob.arrayBuffer()), mime: 'image/jpeg' }
+}
+
+/** Each PDF page becomes a picture; they are placed in a column, as one undoable step, once all are stored. */
+async function importPdf(file: File) {
+  const state = session.getState()
+  const stillHere = () => { const now = session.getState(); return now.pageId === state.pageId && now.editable && !now.conflict }
+  session.say('Opening the PDF…')
+  let pdf: PdfDocument
+  try { pdf = await openPdf(new Uint8Array(await file.arrayBuffer())) } catch (error) {
+    session.say(`That PDF could not be opened (${error instanceof Error ? error.message : String(error)}). Nothing was added.`)
+    return
+  }
+  const placed: { image: string; w: number; h: number }[] = []
+  const count = Math.min(pdf.pageCount, PDF_MAX_PAGES)
+  try {
+    for (let n = 1; n <= count; n++) {
+      if (!stillHere()) { session.say('The page changed while the PDF was importing, so nothing was placed.'); return }
+      const label = `PDF page ${n} of ${count}`
+      session.say(`Preparing ${label}…`)
+      let prepared: Awaited<ReturnType<typeof encodePage>>, page: RenderedPdfPage
+      try {
+        page = await pdf.render(n)
+        prepared = await encodePage(page.canvas)
+        page.canvas.width = page.canvas.height = 0
+      } catch (error) {
+        session.say(`${label} could not be read (${error instanceof Error ? error.message : String(error)}). Nothing was added.`)
+        return
+      }
+      const { bitmap, bytes, mime } = prepared
+      const imageId = await session.uploadImage({ bytes, mime, width: bitmap.width, height: bitmap.height }, (done, total) => session.say(`Uploading ${label}… ${Math.round((done / total) * 100)}%`))
+      if (!imageId) { bitmap.close(); return }
+      pictures.set(imageId, bitmap)
+      placed.push({ image: imageId, w: page.widthPt * PAGE_UNITS_PER_POINT, h: page.heightPt * PAGE_UNITS_PER_POINT })
+    }
+    if (!stillHere()) { session.say('The PDF pages were stored, but this page can no longer be edited here, so they were not placed.'); return }
+    surface.insertImageColumn(placed)
+    if (pdf.pageCount > count) session.say(`Added the first ${count} of ${pdf.pageCount} PDF pages; import the rest from a shorter PDF.`)
+  } finally {
+    void pdf.close()
+  }
+}
+
 let inserting = false
 async function insertPicture(file: File) {
   const state = session.getState()
   if (inserting || !state.pageId || !state.editable || state.conflict) return
+  if (isPdf(file)) {
+    inserting = true
+    renderImageBar()
+    try { await importPdf(file) } finally { inserting = false; renderImageBar() }
+    return
+  }
   inserting = true
   renderImageBar()
   try {
