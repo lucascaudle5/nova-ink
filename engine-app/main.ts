@@ -9,7 +9,8 @@ import { MockServer } from './mock-server'
 import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
 import type { AskInput, AskScope, HelpLevel } from './ask'
 import type { Bounds } from '../engine/src/core/types'
-import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES } from './pdf'
+import { JobRunner } from './jobs'
+import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES, PDF_MAX_SIDE } from './pdf'
 import type { PdfDocument, RenderedPdfPage } from './pdf'
 import { NotebookSession } from './session'
 import type { Api, Data, FolderInfo, NotebookInfo, PageEditor, PageInfo, SessionState, Status } from './session'
@@ -157,6 +158,8 @@ const editor: PageEditor = {
     else surface.fitToContent()
     loadPictures(images.map(i => i.image))
   },
+  applyPlan: plan => surface.applyPlan(plan),
+  busy: () => surface.busy,
   setReadOnly(readOnly) {
     surface.readOnly = readOnly
     document.body.classList.toggle('read-only', readOnly)
@@ -258,6 +261,10 @@ async function importPdf(file: File) {
   }
   const placed: { image: string; w: number; h: number }[] = []
   const count = Math.min(pdf.pageCount, PDF_MAX_PAGES)
+  // Keep the original file too, so NOVA can later place its pages and problems from it. A failure only means NOVA cannot.
+  session.say('Keeping the original PDF…')
+  const original = await session.uploadSource(new Uint8Array(await file.arrayBuffer()), file.name, pdf.pageCount)
+  const provenance: Array<{ imageId: string; page: number }> = []
   try {
     for (let n = 1; n <= count; n++) {
       if (!stillHere()) { session.say('The page changed while the PDF was importing, so nothing was placed.'); return }
@@ -276,10 +283,12 @@ async function importPdf(file: File) {
       const imageId = await session.uploadImage({ bytes, mime, width: bitmap.width, height: bitmap.height }, (done, total) => session.say(`Uploading ${label}… ${Math.round((done / total) * 100)}%`))
       if (!imageId) { bitmap.close(); return }
       pictures.set(imageId, bitmap)
+      provenance.push({ imageId, page: n })
       placed.push({ image: imageId, w: page.widthPt * PAGE_UNITS_PER_POINT, h: page.heightPt * PAGE_UNITS_PER_POINT })
     }
     if (!stillHere()) { session.say('The PDF pages were stored, but this page can no longer be edited here, so they were not placed.'); return }
     surface.insertImageColumn(placed)
+    if (original) for (const p of provenance) void session.setImageMeta(p.imageId, { sourceId: original, sourceName: file.name, page: p.page })
     if (pdf.pageCount > count) session.say(`Added the first ${count} of ${pdf.pageCount} PDF pages; import the rest from a shorter PDF.`)
   } finally {
     void pdf.close()
@@ -370,7 +379,10 @@ function renderSelectionBar() {
   const parts = [strokes ? plural(strokes, 'stroke') : '', images ? plural(images, 'picture') : ''].filter(Boolean)
   const alone = surface.selectedImage
   const angle = turning ?? alone?.angle ?? 0
-  $('selection-label').textContent = `${parts.join(' and ')} selected${angle ? ` · ${Math.round(angle)}°` : ''}`
+  const picked = surface.selection
+  const byNova = picked.strokes.length > 0 && picked.strokes.every(s => s.author === 'ai')
+  const withNova = !byNova && picked.strokes.some(s => s.author === 'ai')
+  $('selection-label').textContent = `${byNova ? 'NOVA drawing: ' : withNova ? 'Includes NOVA drawing: ' : ''}${parts.join(' and ')} selected${angle ? ` · ${Math.round(angle)}°` : ''}`
   $('sel-style').hidden = strokes === 0
   $<HTMLButtonElement>('insert-image').disabled = inserting || surface.readOnly
 }
@@ -1078,5 +1090,48 @@ async function boot() {
   }
   await session.start()
   if (preview && new URLSearchParams(location.search).has('library')) showLibrary(true)
+  startJobs()
+}
+
+// ---- NOVA's rendering jobs ----
+
+/** Renders pages and crops of a stored PDF for NOVA; only the open notebook can, the server has no PDF renderer. */
+const jobs = new JobRunner({
+  rpc: (name, args) => session.rpc(name, args),
+  uploadImage: picture => session.uploadImage(picture),
+  say: text => session.say(text),
+  changed: () => session.refreshList(),
+  async open(bytes) {
+    const pdf = await openPdf(bytes)
+    return {
+      pageCount: pdf.pageCount,
+      async render(number, crop) {
+        const page = await pdf.render(number, crop ? 2400 : PDF_MAX_SIDE)
+        let canvas = page.canvas
+        if (crop) {
+          const sx = Math.min(canvas.width - 1, Math.round(crop.x * canvas.width)), sy = Math.min(canvas.height - 1, Math.round(crop.y * canvas.height))
+          const sw = Math.max(1, Math.min(canvas.width - sx, Math.round(crop.w * canvas.width))), sh = Math.max(1, Math.min(canvas.height - sy, Math.round(crop.h * canvas.height)))
+          const cut = document.createElement('canvas')
+          cut.width = sw; cut.height = sh
+          cut.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh)
+          canvas.width = canvas.height = 0
+          canvas = cut
+        }
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9))
+        if (!blob) throw new Error('This browser could not encode the page.')
+        const picture = { bytes: new Uint8Array(await blob.arrayBuffer()), mime: 'image/jpeg', width: canvas.width, height: canvas.height }
+        canvas.width = canvas.height = 0
+        return picture
+      },
+      close: () => pdf.close(),
+    }
+  },
+})
+function startJobs() {
+  if (!preview && !app) return
+  const poll = () => { if (document.visibilityState !== 'hidden' && session.getState().status !== 'loading') void jobs.poll() }
+  setInterval(poll, 8000)
+  setTimeout(poll, 1500)
+  if (preview) Object.assign(window, { novaPollJobs: () => jobs.poll() })
 }
 void boot()

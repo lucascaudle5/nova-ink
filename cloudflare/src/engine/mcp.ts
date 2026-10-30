@@ -183,6 +183,9 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     sourceId: ref, name: z.string().min(1).max(120), bytes: z.number().int().positive(), count: z.number().int().positive().max(130), index: z.number().int().nonnegative(),
     data: z.string().max(270_000), pages: z.number().int().positive().max(5000).optional(),
   }), 'mcp:write', a => library().putSourceChunk(a))
+  tool('nb_set_image_meta', 'Record which document, page and crop a picture came from', z.object({
+    imageId: ref, meta: z.object({ sourceId: ref, sourceName: z.string().max(120), page: z.number().int().positive().max(5000), crop: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0).max(1), h: z.number().min(0).max(1) }).optional() }),
+  }), 'mcp:write', a => library().setImageMeta(a))
   tool('nb_get_source_chunk', 'Read one piece of a stored source document', z.object({ sourceId: ref, index: z.number().int().nonnegative() }), 'mcp:read', a => library().getSourceChunk(a))
   tool('nb_jobs', 'List rendering jobs waiting for the open notebook', z.object({}), 'mcp:read', async () => {
     const pending = await library().pendingJobs() as Data

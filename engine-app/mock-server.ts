@@ -12,7 +12,9 @@ type MockPage = {
   notebookId: string; title: string; deletedAt: string | null; revision: number
   rows: Map<string, { key: string; stroke: unknown }>; paper: Paper; camera: Camera | null
   lease: Lease | null; last: { saveId: string; clientId: string; revision: number } | null
+  ops: Map<string, MockOp>
 }
+type MockOp = { opId: string; ops: unknown[]; status: 'queued' | 'applied' | 'saved' | 'failed'; revision: number | null; message?: string }
 type MockNotebook = { id: string; name: string; folderId: string | null; color: string | null; editedAt: string; deletedAt: string | null }
 type MockFolder = { id: string; name: string; deletedAt: string | null }
 const COLOR = /^#[0-9a-f]{6}$/
@@ -22,6 +24,10 @@ const DEFAULT_PAPER: Paper = { color: 'white', pattern: 'blank' }
 
 export class MockServer {
   folders: MockFolder[] = []
+  /** Source documents (original PDFs), render jobs NOVA asked for, and where pictures came from. */
+  sources = new Map<string, { name: string; bytes: number; count: number; pages: number | null; pieces: Map<number, string> }>()
+  jobs: Array<{ jobId: string; kind: string; params: any; status: 'pending' | 'done' | 'failed'; outputs?: unknown[]; message?: string }> = []
+  imageMeta = new Map<string, unknown>()
   images = new Map<string, { mime: string; width: number; height: number; bytes: number; count: number; pieces: Map<number, string> }>()
   notebooks: MockNotebook[] = []
   pages = new Map<string, MockPage>()
@@ -50,12 +56,27 @@ export class MockServer {
 
   addPage(notebookId: string, title: string, paper: Paper = DEFAULT_PAPER, afterPageId?: string | null): string {
     const id = this.id()
-    const page: MockPage = { notebookId, title, deletedAt: null, revision: 0, rows: new Map(), paper: { ...paper }, camera: null, lease: null, last: null }
+    const page: MockPage = { notebookId, title, deletedAt: null, revision: 0, rows: new Map(), paper: { ...paper }, camera: null, lease: null, last: null, ops: new Map() }
     const entries = [...this.pages]
     const at = afterPageId ? entries.findIndex(([key]) => key === afterPageId) : -1
     if (at < 0) this.pages.set(id, page)
     else this.pages = new Map([...entries.slice(0, at + 1), [id, page], ...entries.slice(at + 1)])
     return id
+  }
+
+  /** What NOVA's tools do on the real server: queue a batch for the page's open editor. */
+  enqueueOps(pageId: string, requestId: string, ops: unknown[]): string {
+    const p = this.pages.get(pageId)!
+    const existing = p.ops.get(requestId)
+    if (existing) return existing.opId
+    const opId = this.id()
+    p.ops.set(requestId, { opId, ops, status: 'queued', revision: null })
+    return opId
+  }
+  opStatus(pageId: string, requestId: string) { return this.pages.get(pageId)?.ops.get(requestId) }
+  addJob(params: unknown, kind = 'place_source'): string { const jobId = this.id(); this.jobs.push({ jobId, kind, params, status: 'pending' }); return jobId }
+  private pendingOps(p: MockPage) {
+    return [...p.ops].filter(([, o]) => o.status === 'queued' || o.status === 'applied').map(([requestId, o]) => ({ requestId, opId: o.opId, ops: o.ops }))
   }
 
   api = async (name: string, args: Record<string, unknown>): Promise<Data> => {
@@ -129,6 +150,27 @@ export class MockServer {
         if (!entry || entry.pieces.size !== entry.count) return { ok: false, code: 'NOT_FOUND', message: 'That picture was not found.' }
         return ok({ mime: entry.mime, width: entry.width, height: entry.height, bytes: entry.bytes, count: entry.count, index: a.index, data: entry.pieces.get(a.index) })
       }
+      case 'nb_set_image_meta': this.imageMeta.set(a.imageId, a.meta); return ok()
+      case 'nb_put_source_chunk': {
+        let entry = this.sources.get(a.sourceId)
+        if (!entry) this.sources.set(a.sourceId, entry = { name: a.name, bytes: a.bytes, count: a.count, pages: a.pages ?? null, pieces: new Map() })
+        entry.pieces.set(a.index, a.data)
+        return ok({ complete: entry.pieces.size === entry.count })
+      }
+      case 'nb_get_source_chunk': {
+        const entry = this.sources.get(a.sourceId)
+        if (!entry || entry.pieces.size !== entry.count) return { ok: false, code: 'NOT_FOUND', message: 'That document was not found.' }
+        return ok({ bytes: entry.bytes, count: entry.count, index: a.index, data: entry.pieces.get(a.index) })
+      }
+      case 'nb_jobs': return ok({ jobs: this.jobs.filter(j => j.status === 'pending').map(j => ({ jobId: j.jobId, kind: j.kind, params: j.params, source: { name: this.sources.get(j.params.sourceId)?.name } })) })
+      case 'nb_job_done': {
+        const job = this.jobs.find(j => j.jobId === a.jobId)
+        if (!job) return missing()
+        if (job.status !== 'pending') return ok({ duplicate: true, status: job.status })
+        if (a.failure) { job.status = 'failed'; job.message = a.failure; return ok({ status: 'failed', message: a.failure }) }
+        job.status = 'done'; job.outputs = a.outputs
+        return ok({ status: 'done' })
+      }
       case 'nb_rename_notebook': if (!book) return missing(); book.name = a.name; return ok()
       case 'nb_remove_notebook':
         if (!book) return missing()
@@ -163,9 +205,22 @@ export class MockServer {
         const readOnly = this.lease(p, a.clientId, a.takeOver)
         this.last = { notebookId: p.notebookId, pageId: a.pageId }
         const rows = [...p.rows.values()].sort((x, y) => x.key < y.key ? -1 : x.key > y.key ? 1 : 0)
-        return ok({ revision: p.revision, rows: JSON.stringify(rows), strokeCount: rows.length, paper: p.paper, camera: p.camera, readOnly, page: this.meta(a.pageId, p) })
+        return ok({ revision: p.revision, rows: JSON.stringify(rows), strokeCount: rows.length, paper: p.paper, camera: p.camera, readOnly, page: this.meta(a.pageId, p), pendingOps: this.pendingOps(p) })
       }
-      case 'nb_heartbeat': return ok({ readOnly: this.lease(p, a.clientId) })
+      case 'nb_heartbeat': {
+        const readOnly = this.lease(p, a.clientId)
+        if (readOnly) return ok({ readOnly })
+        for (const id of a.applied ?? []) { const o = p.ops.get(id); if (o?.status === 'queued') o.status = 'applied' }
+        return ok({ readOnly, revision: p.revision, pendingOps: this.pendingOps(p) })
+      }
+      case 'nb_report_ops': {
+        for (const r of a.results ?? []) {
+          const o = p.ops.get(r.requestId)
+          if (!o || (o.status !== 'queued' && o.status !== 'applied')) continue
+          if (r.status === 'failed') { o.status = 'failed'; o.message = r.message } else { o.status = 'saved'; o.revision = p.revision }
+        }
+        return ok()
+      }
       case 'nb_release': if (p.lease?.clientId === a.clientId) p.lease = null; return ok()
       case 'nb_list_checkpoints': return ok({ checkpoints: [] })
       case 'nb_restore_checkpoint': return { ok: false, code: 'BACKUP_UNAVAILABLE', message: 'The preview server keeps no checkpoints.' }
@@ -184,6 +239,7 @@ export class MockServer {
         if (a.paper) p.paper = a.paper
         if (a.camera) p.camera = a.camera
         p.revision++
+        for (const id of a.appliedOps ?? []) { const o = p.ops.get(id); if (o && (o.status === 'queued' || o.status === 'applied')) { o.status = 'saved'; o.revision = p.revision } }
         const owner = this.notebooks.find(n => n.id === p.notebookId)
         if (owner) owner.editedAt = new Date().toISOString()
         p.last = { saveId: a.saveId, clientId: a.clientId, revision: p.revision }

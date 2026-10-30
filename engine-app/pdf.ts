@@ -54,7 +54,7 @@ export interface RenderedPdfPage {
 export interface PdfDocument {
   pageCount: number
   /** Renders one page (1-based) on a white background, at most PDF_MAX_SIDE pixels on its longest side. */
-  render(number: number): Promise<RenderedPdfPage>
+  render(number: number, maxSide?: number): Promise<RenderedPdfPage>
   close(): Promise<void>
 }
 
@@ -71,10 +71,10 @@ export async function openPdf(data: Uint8Array): Promise<PdfDocument> {
   const doc = await task.promise.catch(error => { void task.destroy(); throw error })
   return {
     pageCount: doc.numPages,
-    async render(number) {
+    async render(number, maxSide = PDF_MAX_SIDE) {
       const page = await doc.getPage(number)
       const base = page.getViewport({ scale: 1 })
-      const scale = PDF_MAX_SIDE / Math.max(base.width, base.height)
+      const scale = maxSide / Math.max(base.width, base.height)
       const viewport = page.getViewport({ scale })
       const canvas = document.createElement('canvas')
       canvas.width = Math.max(1, Math.round(viewport.width))

@@ -8,6 +8,8 @@
  * - Another device's newer version or editing control is a conflict, never overwritten.
  */
 import { parseItem } from '../engine/src/core/format'
+import { planOps } from '../engine/src/core/ops'
+import type { Op, Plan } from '../engine/src/core/ops'
 import type { Paper } from '../engine/src/core/paper'
 import { PageSync } from '../engine/src/core/sync'
 import type { PageDelta } from '../engine/src/core/sync'
@@ -17,6 +19,8 @@ import type { Camera, ImageItem, PageItem, Stroke } from '../engine/src/core/typ
 /** Must match the server's piece size (cloudflare/src/engine/library-do.ts IMAGE_CHUNK_BYTES). */
 export const IMAGE_CHUNK_BYTES = 192 * 1024
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+/** Must match the server (library-do.ts MAX_SOURCE_BYTES). */
+export const MAX_SOURCE_BYTES = 24 * 1024 * 1024
 export interface StoredPicture { bytes: Uint8Array; mime: string; width: number; height: number }
 
 export type Data = Record<string, any> & { ok: boolean; code?: string; message?: string }
@@ -30,7 +34,14 @@ export interface PageEditor {
   /** Replaces the page (clears undo) and shows it; a null camera fits the content. */
   load(strokes: Stroke[], images: ImageItem[], paper: Paper, camera: Camera | null): void
   setReadOnly(readOnly: boolean): void
+  /** Applies NOVA's planned operations as ONE undo step (and shows them). Optional: an editor without it ignores NOVA's requests. */
+  applyPlan?(plan: Plan): number
+  /** True while the user is writing, dragging or panning; NOVA's changes wait until it is false. */
+  busy?(): boolean
 }
+
+/** A request from NOVA (the model) waiting to be applied to the open page. */
+export interface PendingOp { requestId: string; opId: string; ops: Op[] }
 
 export type Status = 'loading' | 'saved' | 'unsaved' | 'saving' | 'notSynced' | 'conflict' | 'readOnly' | 'recovery' | 'trash'
 export type Conflict = 'revision' | 'lease' | 'damaged' | 'gone' | null
@@ -65,7 +76,7 @@ export interface SessionOptions {
   retryDelaysMs?: number[]
 }
 
-type Pending = { saveId: string; baseRevision: number; delta: PageDelta; paper?: Paper; camera?: Camera }
+type Pending = { saveId: string; baseRevision: number; delta: PageDelta; paper?: Paper; camera?: Camera; appliedOps: string[] }
 
 function base64(bytes: Uint8Array): string {
   let raw = ''
@@ -108,6 +119,9 @@ export class NotebookSession {
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retryAttempt = 0
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  /** NOVA's requests applied in this editor and not yet part of a confirmed save, and ones already reported as failed or unchanged. */
+  private applied = new Set<string>()
+  private reported = new Set<string>()
   private disposed = false
 
   constructor(options: SessionOptions) {
@@ -117,7 +131,7 @@ export class NotebookSession {
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.autosaveMs = options.autosaveMs ?? 650
     this.cameraSaveMs = options.cameraSaveMs ?? 3000
-    this.heartbeatMs = options.heartbeatMs ?? 15_000
+    this.heartbeatMs = options.heartbeatMs ?? 6_000
     this.retryDelaysMs = options.retryDelaysMs ?? [2000, 5000, 10000, 20000, 30000]
   }
 
@@ -209,6 +223,7 @@ export class NotebookSession {
       }
       this.sync = new PageSync(loaded.keys)
       this.pending = null
+      this.applied.clear(); this.reported.clear()
       this.retryAttempt = 0
       this.editor.load(loaded.strokes, loaded.images, res.paper, res.camera ?? null)
       this.ackPaper = { ...res.paper }
@@ -219,6 +234,7 @@ export class NotebookSession {
       if (editable) {
         this.status('saved', 'Saved')
         this.startHeartbeat()
+        void this.handleOps(res.pendingOps)
       } else this.status('readOnly', 'Another device is editing this page. You are viewing its last saved version.')
       return true
     })
@@ -308,18 +324,19 @@ export class NotebookSession {
       if (!this.hasUnsavedChanges) { if (this.state.status !== 'saved') this.status('saved', 'Saved'); return 'nothing' }
       const paper = this.editor.paper(), camera = this.editor.camera()
       req = {
-        saveId: this.newId(), baseRevision: this.state.revision, delta: this.sync.delta(this.editor.items()),
+        saveId: this.newId(), baseRevision: this.state.revision, delta: this.sync.delta(this.editor.items()), appliedOps: [...this.applied],
         ...(samePaper(this.ackPaper, paper) ? {} : { paper: { ...paper } }),
         ...(cameraKey(camera) === this.ackCamera ? {} : { camera: { x: round(camera.x, 1), y: round(camera.y, 1), z: round(camera.z, 4) } }),
       }
       this.pending = req
     }
-    const viewOnly = !req.delta.adds.length && !req.delta.removes.length && !req.paper
+    const viewOnly = !req.delta.adds.length && !req.delta.removes.length && !req.paper && !req.appliedOps.length
     if (!viewOnly || this.state.status !== 'saved') this.status('saving', 'Saving…')
     const res = await this.call('nb_save_page', {
       pageId, clientId: this.clientId, saveId: req.saveId, baseRevision: req.baseRevision,
       adds: req.delta.adds, removes: req.delta.removes,
       ...(req.paper ? { paper: req.paper } : {}), ...(req.camera ? { camera: req.camera } : {}),
+      ...(req.appliedOps.length ? { appliedOps: req.appliedOps } : {}),
     })
     if (this.state.pageId !== pageId) return 'blocked'
     if (res.ok || (res.code === 'CONFLICT' && res.ownLastSaveId === req.saveId && Number.isSafeInteger(res.revision))) {
@@ -358,6 +375,7 @@ export class NotebookSession {
     this.sync.acknowledge(req.delta)
     if (req.paper) this.ackPaper = req.paper
     if (req.camera) this.ackCamera = cameraKey(req.camera)
+    for (const id of req.appliedOps) this.applied.delete(id)
     this.pending = null
     this.retryAttempt = 0
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null }
@@ -382,12 +400,43 @@ export class NotebookSession {
   async heartbeat(): Promise<void> {
     const { pageId } = this.state
     if (!pageId || !this.state.editable) return
-    const res = await this.call('nb_heartbeat', { pageId, clientId: this.clientId })
-    if (!res.ok || !res.readOnly || this.state.pageId !== pageId) return
+    const res = await this.call('nb_heartbeat', { pageId, clientId: this.clientId, ...(this.applied.size ? { applied: [...this.applied] } : {}) })
+    if (!res.ok || this.state.pageId !== pageId) return
+    if (!res.readOnly) {
+      // The server moved ahead while this editor was away (for example NOVA saved while the notebook was asleep) and
+      // nothing here is unsaved: show the newer page rather than meet a conflict on the next stroke.
+      if (Number.isSafeInteger(res.revision) && res.revision > this.state.revision && !this.pending && !this.hasUnsavedChanges && !this.editor.busy?.()) { void this.reload(); return }
+      await this.handleOps(res.pendingOps)
+      return
+    }
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null }
     this.editor.setReadOnly(true)
     if (this.hasStrokeChanges) this.status('conflict', 'Another device took over editing before your latest changes were saved. Use "Copy to a new page" to keep them.', { editable: false, conflict: 'lease' })
     else this.status('readOnly', 'Another device took over editing. You are viewing the last saved version.', { editable: false })
+  }
+
+  /**
+   * Applies NOVA's waiting requests to this page, each as one undo step, using the same planner as the server. A request
+   * that cannot apply (its targets are gone) or that changes nothing is reported, never retried forever. Waits while the
+   * user is writing. Idempotent: a request already applied here, or already on the page, is not applied again.
+   */
+  private async handleOps(list: unknown): Promise<void> {
+    const apply = this.editor.applyPlan
+    const { pageId } = this.state
+    if (!apply || !pageId || !this.state.editable || this.state.conflict || !Array.isArray(list) || !list.length) return
+    if (this.editor.busy?.()) return
+    const results: Array<{ requestId: string; status: 'failed' | 'noop'; message?: string }> = []
+    for (const op of list as PendingOp[]) {
+      if (this.applied.has(op.requestId) || this.reported.has(op.requestId)) continue
+      const items = this.editor.items()
+      const plan = planOps({ strokes: items.filter((i): i is Stroke => !isImage(i)), images: items.filter(isImage) }, op.ops, { opId: op.opId })
+      if (!plan.ok) { this.reported.add(op.requestId); results.push({ requestId: op.requestId, status: 'failed', message: plan.message }); continue }
+      if (plan.empty) { this.reported.add(op.requestId); results.push({ requestId: op.requestId, status: 'noop' }); continue }
+      this.applied.add(op.requestId)
+      if (apply.call(this.editor, plan) === 0) { this.applied.delete(op.requestId); this.reported.add(op.requestId); results.push({ requestId: op.requestId, status: 'failed', message: 'The notebook could not apply this change.' }) }
+    }
+    if (this.applied.size) this.changed()
+    if (results.length) await this.call('nb_report_ops', { pageId, clientId: this.clientId, results })
   }
 
   /** Takes editing control back. Local changes are kept when nobody saved in between; otherwise it is a conflict. */
@@ -444,6 +493,7 @@ export class NotebookSession {
       this.stopTimers()
       this.sync = new PageSync()
       this.pending = null
+      this.applied.clear(); this.reported.clear()
       this.ackPaper = { ...opened.paper }
       this.ackCamera = ''
       this.editor.setReadOnly(false)
@@ -456,6 +506,40 @@ export class NotebookSession {
   }
 
   // ---- pictures ----
+
+  /** A tool call for helpers that work beside the session (render jobs); never throws. */
+  rpc(name: string, args: Record<string, unknown>): Promise<Data> { return this.call(name, args) }
+
+  /**
+   * Keeps the original PDF as a source document, so NOVA can place its pages and problems later. The id comes from the
+   * file's content, so the same file is stored once. Returns null (the pages are still imported) if it cannot be kept.
+   */
+  async uploadSource(bytes: Uint8Array, name: string, pages: number): Promise<string | null> {
+    if (bytes.length > MAX_SOURCE_BYTES) return null
+    let sourceId: string
+    try {
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+      sourceId = 'src_' + [...digest].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40)
+    } catch { return null }
+    const count = Math.max(1, Math.ceil(bytes.length / IMAGE_CHUNK_BYTES))
+    for (let index = 0; index < count; index++) {
+      const data = base64(bytes.subarray(index * IMAGE_CHUNK_BYTES, (index + 1) * IMAGE_CHUNK_BYTES))
+      let res: Data = { ok: false }
+      for (let attempt = 0; attempt < 3 && !res.ok; attempt++) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, 800 * attempt))
+        res = await this.call('nb_put_source_chunk', { sourceId, name: name.slice(0, 120) || 'Document.pdf', bytes: bytes.length, count, index, data, ...(index === 0 && pages > 0 ? { pages } : {}) })
+        if (!res.ok && res.code !== 'NETWORK' && res.code !== 'SERVER_ERROR' && res.code !== 'STORAGE_ERROR') break
+      }
+      if (!res.ok) return null
+      if (res.complete) return sourceId   // already stored (same file) or the last piece went in
+    }
+    return null
+  }
+
+  /** Records where a picture came from. Best effort: a failure never blocks the import. */
+  async setImageMeta(imageId: string, meta: { sourceId: string; sourceName: string; page: number; crop?: { x: number; y: number; w: number; h: number } }): Promise<void> {
+    await this.call('nb_set_image_meta', { imageId, meta })
+  }
 
   /**
    * Stores a picture in pieces and returns its id once the server confirmed every piece, or null (with a

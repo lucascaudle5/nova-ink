@@ -610,6 +610,22 @@ export class InkSurface {
     this.notify()
   }
 
+  /** True while the user is in the middle of something (writing, dragging a selection, drawing a lasso, panning). */
+  get busy(): boolean { return this.live !== null || this.drag !== null || this.lasso !== null || this.snipDrag !== null || this.input.navigating || this.interaction !== null }
+
+  /**
+   * Applies NOVA's planned batch (see core/ops.ts) as ONE undoable step. The camera is not touched. Items that no longer
+   * exist (moved ones get new ids) drop out of the selection. Returns the number of changes, 0 if nothing was applied.
+   */
+  applyPlan(plan: Parameters<History['applyPlan']>[0]): number {
+    if (this.readOnly) return 0
+    const changed = this.history.applyPlan(plan)
+    this.dropStaleSelection()
+    this.invalidateScene()
+    this.notify()
+    return changed
+  }
+
   /** Adds strokes as one undoable step. */
   addStrokes(strokes: readonly Stroke[]): void { this.history.addStrokes(strokes); this.notify() }
 
