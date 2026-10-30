@@ -1,0 +1,7 @@
+{
+  // A throw-away test server (see src/index.ts). Own name, no bindings, no secrets, no storage.
+  "name": "nova-gemini-probe",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true }
+}
