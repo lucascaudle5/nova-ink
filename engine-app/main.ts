@@ -940,6 +940,8 @@ let askNote = ''
 let snipFromSheet = false
 let snipShown = false
 let snipSending = false
+/** What the last message in the snip bar was about: it is cleared when the page or the rectangle changes. */
+let snipMessageKey = ''
 
 function paintSnipLevels() {
   $('snip-levels').replaceChildren(...HELP_ORDER.map(level => {
@@ -967,6 +969,8 @@ function renderSnipBar() {
   }
   snipShown = on
   if (!on) return
+  const key = session.getState().pageId + JSON.stringify(surface.snipArea)
+  if (key !== snipMessageKey) { if (!snipSending) snipSay(''); snipMessageKey = key }
   const note = $('snip-note')
   note.textContent = askNote ? `Note: ${askNote}` : ''
   $<HTMLButtonElement>('snip-send').disabled = snipSending
