@@ -166,3 +166,6 @@ body.dark-paper .status .actions button, body.dark-paper .pages button.text, bod
 .ask-result { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
 .ask-result[data-tone="bad"] { color: var(--danger); font-weight: 600; }
 .ask-result[data-tone="ok"] { color: #1a7f37; font-weight: 600; }
+
+/* ChatGPT's full-screen composer covers the bottom centre (about 56 px tall plus margin): lift the status above it and let it use the width. */
+body.host-composer .status { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 68px); max-width: calc(100vw - 24px); flex-wrap: wrap; border-radius: 18px; }

@@ -248,6 +248,8 @@ function renderImageBar() {
 
 function applyHost(context: McpUiHostContext | undefined) {
   host = context
+  // In full screen ChatGPT floats its "Ask ChatGPT" box over the bottom centre; keep the status and its buttons clear of it.
+  document.body.classList.toggle('host-composer', !!app && context?.displayMode === 'fullscreen')
   const top = context?.safeAreaInsets?.top ?? 0
   document.documentElement.style.setProperty('--top', `max(12px, env(safe-area-inset-top), ${top + 12}px)`)
   renderMenu()
