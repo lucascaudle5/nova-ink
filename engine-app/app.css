@@ -2,8 +2,8 @@
 html, body { overflow: hidden; }
 body { min-height: 480px; }
 
-.toolbar { max-width: calc(100vw - 420px); }
-@media (max-width: 900px) {
+.toolbar { max-width: calc(100vw - 540px); }
+@media (max-width: 1100px) {
   .toolbar { top: calc(var(--top) + 56px); max-width: calc(100vw - 24px); }
 }
 
@@ -152,3 +152,17 @@ body.in-library .status { z-index: 9; }
 body.dark-paper .status[data-tone="bad"] { background: #3b1d24; }
 body.dark-paper .status[data-tone="bad"] #status-text { color: #ffb3bd; }
 body.dark-paper .status .actions button, body.dark-paper .pages button.text, body.dark-paper .pages select, body.dark-paper .pages input.rename { background: #2b3038; color: var(--ink); }
+
+.floating button.ask-button { width: auto; padding: 0 10px 0 8px; gap: 6px; display: flex; align-items: center; font-size: 13.5px; font-weight: 600; }
+.ask-button svg { width: 18px; height: 18px; }
+.segmented { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.segmented button { padding: 10px 4px; border: 0; border-right: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.segmented button:last-child { border-right: 0; }
+.segmented button.selected { background: var(--accent); color: #fff; }
+.ask-hint { margin-top: 6px; font-size: 12.5px; color: var(--muted); min-height: 2.6em; }
+.ask-question { box-sizing: border-box; width: 100%; min-height: 96px; resize: vertical; font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+.ask-question:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.ask-disclosure { margin-top: 10px; font-size: 13px; font-weight: 600; }
+.ask-result { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
+.ask-result[data-tone="bad"] { color: var(--danger); font-weight: 600; }
+.ask-result[data-tone="ok"] { color: #1a7f37; font-weight: 600; }

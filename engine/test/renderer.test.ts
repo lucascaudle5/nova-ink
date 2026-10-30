@@ -126,3 +126,40 @@ test('on dark paper near-black ink is shown light; colored ink is unchanged', ()
   assert.ok(base.ctx.calls.includes('fill:#e6e8eb'))
   assert.equal(a.style.color, '#1b1f24', 'stored color is untouched')
 })
+
+// ---- view export (Ask NOVA) ----
+
+test('exportView composes paper, pictures and ink on throwaway canvases and never draws the live layer', async () => {
+  const { composeView, exportScale, countInView } = await import('../src/render/export')
+  const { InkDocument } = await import('../src/core/document')
+  const doc = new InkDocument()
+  const strokes = generateStrokes(10)
+  doc.load(strokes, [createImage({ image: 'pic1', x: 0, y: 0, w: 100, h: 80 })])
+  const made: Array<CanvasLike & { ctx: FakeContext }> = []
+  const result = composeView({
+    doc, paper: { color: 'dark', pattern: 'graph' }, camera: { x: -10000, y: -10000, z: 1 }, widthCss: 800, heightCss: 600,
+    options: { createPath: () => ({}), imageSource: () => ({}) as never },
+    makeCanvas: () => { const c = fakeCanvas(); made.push(c); return c },
+  })
+  assert.deepEqual([result.strokes, result.images], [0, 0], 'far from the content: nothing in view')
+  const view = { x: 0, y: 0, z: 1 }
+  const shown = composeView({
+    doc, paper: { color: 'dark', pattern: 'blank' }, camera: view, widthCss: 800, heightCss: 600,
+    options: { createPath: () => ({}), imageSource: () => ({}) as never },
+    makeCanvas: () => { const c = fakeCanvas(); made.push(c); return c },
+  })
+  assert.equal(shown.images, 1)
+  assert.equal(shown.strokes, countInView(doc, view, 800, 600).strokes)
+  const [paperLayer, base, live, snapshot] = made.slice(-4)
+  assert.equal(shown.canvas, paperLayer, 'the paper canvas carries the finished picture')
+  assert.equal(paperLayer.ctx.fillStyle, '#16181c')
+  assert.ok(base.ctx.calls.filter(c => c.startsWith('fill')).length === shown.strokes)
+  assert.equal(base.ctx.images.length, 1, 'the picture is drawn')
+  assert.ok(paperLayer.ctx.images.length === 1, 'ink layer is laid over the paper')
+  assert.deepEqual(live.ctx.calls, [], 'no live stroke, selection frame or eraser ring')
+  assert.deepEqual(snapshot.ctx.calls, [])
+  // 800 x 600 CSS at 2x would be 1600 x 1200: within the cap, so it keeps retina scale.
+  assert.deepEqual([paperLayer.width, paperLayer.height], [1600, 1200])
+  assert.equal(exportScale(3000, 2000), 1600 / 3000)
+  assert.equal(exportScale(100, 100), 2)
+})

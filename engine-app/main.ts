@@ -5,6 +5,8 @@ import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
 import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MockServer } from './mock-server'
+import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_QUESTION } from './ask'
+import type { AskInput, HelpLevel } from './ask'
 import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES } from './pdf'
 import type { PdfDocument, RenderedPdfPage } from './pdf'
 import { NotebookSession } from './session'
@@ -680,6 +682,93 @@ function folderSheet(f: FolderInfo | null) {
   const note = el('div', { className: 'sheet-note', textContent: f ? 'Deleting a folder moves it to the trash; its notebooks move to the top level and are not deleted.' : 'Folders hold notebooks. Move a notebook in from its options.' })
   openSheet(f ? 'Folder' : 'New folder', [input, note], buttons)
 }
+
+// ---- Ask NOVA ----
+
+let askLevel: HelpLevel = 'nudge'
+let askSending = false
+
+/** In the desktop preview nothing is sent; the message is kept here so it can be inspected. */
+const askLog: Array<{ role: string; content: Array<{ type: string; text?: string; mimeType?: string; bytes?: number }> }> = []
+if (preview) Object.assign(window, { novaAskLog: askLog })
+
+function askInput(question: string): AskInput {
+  const state = session.getState()
+  const notebook = state.notebooks.find(n => n.id === state.notebookId)
+  const live = livePages(state)
+  const counts = surface.viewCounts()
+  return {
+    notebook: notebook?.name ?? 'Notebook', pageTitle: session.currentPage?.title ?? 'Page',
+    pageNumber: Math.max(1, live.findIndex(p => p.id === state.pageId) + 1), pageCount: live.length,
+    paper: surface.paper, zoom: surface.camera.z, visibleStrokes: counts.strokes, visiblePictures: counts.images,
+    helpLevel: askLevel, question,
+  }
+}
+
+/** Student-initiated only: this runs when Send is tapped, never on its own. Reports "Sent" or the reason it was not. */
+async function sendAsk(question: string, say: (text: string, tone?: 'ok' | 'bad') => void): Promise<boolean> {
+  const input = askInput(question)
+  const early = askRefusal(input, null)
+  if (early) { say(early, 'bad'); return false }
+  say('Rendering your work…')
+  let png: string
+  try { png = await blobToBase64(await surface.exportView()) } catch (error) {
+    say(`Could not render the screen, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
+    return false
+  }
+  // The student may have moved or edited while the picture was prepared; send what the picture shows.
+  const refusal = askRefusal(input, png.length)
+  if (refusal) { say(refusal, 'bad'); return false }
+  const message = askMessage(input, png)
+  if (!app) {
+    askLog.push({ role: message.role, content: message.content.map(c => c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', mimeType: c.mimeType, bytes: c.data.length }) })
+    say('Preview: logged in window.novaAskLog; nothing was sent to ChatGPT.', 'ok')
+    return true
+  }
+  say('Sending to ChatGPT…')
+  try {
+    const answer = await app.sendMessage(message)
+    if (answer.isError) throw new Error('ChatGPT did not accept the message')
+  } catch (error) {
+    say(`Not sent: ${error instanceof Error ? error.message : String(error)}`, 'bad')
+    return false
+  }
+  say('Sent. The answer will appear in the chat.', 'ok')
+  return true
+}
+
+function askSheet() {
+  tools.closePopover()
+  closePanels()
+  askSending = false
+  const label = (text: string) => el('div', { className: 'sheet-label', textContent: text })
+  const hint = el('div', { className: 'ask-hint' })
+  const segments = el('div', { className: 'segmented', role: 'radiogroup', ariaLabel: 'Help level' })
+  const paintLevels = () => {
+    segments.replaceChildren(...HELP_ORDER.map(level => {
+      const b = el('button', { className: level === askLevel ? 'selected' : '', textContent: HELP_LEVELS[level].label, role: 'radio', ariaChecked: String(level === askLevel) })
+      b.addEventListener('click', () => { askLevel = level; paintLevels() })
+      return b
+    }))
+    hint.textContent = HELP_LEVELS[askLevel].instruction
+  }
+  paintLevels()
+  const question = el('textarea', { className: 'ask-question', placeholder: 'What do you want help with?', maxLength: MAX_QUESTION, ariaLabel: 'Question' })
+  const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
+  const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
+  const send = action('Send', async () => {
+    if (askSending) return
+    askSending = true
+    send.disabled = true
+    const sent = await sendAsk(question.value, say)
+    askSending = false
+    send.disabled = false
+    if (sent) question.value = ''
+  }, 'text primary')
+  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Question'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), send])
+  setTimeout(() => question.focus())
+}
+$('ask-button').addEventListener('click', askSheet)
 
 // ---- More menu ----
 

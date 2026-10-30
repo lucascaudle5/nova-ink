@@ -11,6 +11,7 @@ import { Samples } from '../core/metrics'
 import type { Paper } from '../core/paper'
 import { createStroke } from '../core/stroke'
 import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
+import { composeView, countInView } from '../render/export'
 import { CanvasRenderer, createPath2D } from '../render/renderer'
 
 export interface SurfaceMetrics {
@@ -371,6 +372,26 @@ export class InkSurface {
     const target = bounds ? fitBounds(bounds, this.widthCss, this.heightCss) : { x: 0, y: 0, z: 1 }
     if (animate) this.animateCamera(target)
     else this.setCamera(target)
+  }
+
+  /** Strokes and pictures in the current view. */
+  viewCounts(): { strokes: number; images: number } {
+    return countInView(this.doc, this.camera, this.widthCss, this.heightCss)
+  }
+
+  /**
+   * A PNG of the current view (paper, pictures, ink; long side at most 1600 px), drawn on throwaway
+   * canvases so the selection frame, eraser ring and unfinished stroke never appear. Does not move the camera.
+   */
+  exportView(): Promise<Blob> {
+    const { canvas } = composeView({
+      doc: this.doc, paper: this.paper, camera: this.camera, widthCss: this.widthCss, heightCss: this.heightCss,
+      options: { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null },
+      makeCanvas: () => document.createElement('canvas'),
+    })
+    return new Promise((resolve, reject) => {
+      (canvas as HTMLCanvasElement).toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not encode the view.')), 'image/png')
+    })
   }
 
   capabilities(): Capabilities {
