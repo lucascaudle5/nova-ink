@@ -78,8 +78,10 @@ export class InputController {
   eraserRadiusPx: number
   private inkPointer: number | null = null
   private inkMode: Tool | null = null
+  private inkKind: PointerKind | null = null
   /** A finger dragging a picture (select tool), or null. */
   private grab: number | null = null
+  private grabT = 0
   private lastErase: { x: number; y: number } | null = null
   private touches = new Map<number, { x: number; y: number }>()
   private ignored = new Set<number>()
@@ -95,6 +97,32 @@ export class InputController {
   get inking(): boolean { return this.inkPointer !== null }
   get navigating(): boolean { return this.gesture !== null }
 
+  /**
+   * Drops everything in progress (a stroke, an erase, a picture drag, fingers) as cancelled. For when the page loses
+   * its pointers without telling us (a lost capture, the app going to the background), so input can never stay wedged.
+   */
+  cancelAll(): void {
+    const mode = this.inkMode, grabbed = this.grab !== null
+    const active = this.inkPointer !== null
+    this.inkPointer = null
+    this.inkMode = null
+    this.inkKind = null
+    this.grab = null
+    this.lastErase = null
+    this.touches.clear()
+    this.ignored.clear()
+    this.gesture = null
+    this.tap = null
+    if (active) this.endInk(mode, true)
+    else if (grabbed) this.handlers.selectEnd?.(true)
+  }
+
+  private endInk(mode: Tool | null, cancelled: boolean) {
+    if (mode === 'pen') this.handlers.strokeEnd(cancelled)
+    else if (mode === 'select') this.handlers.selectEnd?.(cancelled)
+    else if (mode) this.handlers.eraseEnd()
+  }
+
   handle(event: PointerInput): void {
     if (event.kind === 'touch') this.handleTouch(event)
     else this.handleInk(event)
@@ -104,13 +132,16 @@ export class InputController {
     const { phase, id, samples } = event
     if (samples.length && (phase === 'down' ? this.inkPointer === null : id === this.inkPointer)) this.lastInkT = samples[samples.length - 1].t
     if (phase === 'down') {
+      // A second pen or mouse pointer cannot start while the first is down, so the first one must have been lost.
+      if (this.inkPointer !== null && this.inkKind === event.kind && id !== this.inkPointer) this.cancelAll()
       if (this.readOnly || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
-      if (this.grab !== null) { this.handlers.selectEnd?.(true); this.ignored.add(this.grab); this.grab = null }
+      if (this.grab !== null) { const lost = this.grab; this.grab = null; this.ignored.add(lost); this.handlers.selectEnd?.(true) }
       for (const touchId of this.touches.keys()) this.ignored.add(touchId)
       this.touches.clear()
       this.gesture = null
       this.tap = null
       this.inkPointer = id
+      this.inkKind = event.kind
       this.inkMode = this.tool
       if (this.inkMode === 'pen') {
         const [first, ...rest] = samples.map(s => this.toPageSample(s))
@@ -132,13 +163,14 @@ export class InputController {
       else for (const s of samples) this.eraseSample(s)
     }
     if (phase === 'up' || phase === 'cancel') {
-      if (this.inkMode === 'pen') this.handlers.strokeEnd(phase === 'cancel')
-      else if (this.inkMode === 'select') this.handlers.selectEnd?.(phase === 'cancel')
-      else this.handlers.eraseEnd()
+      // Clear our state first: if an end handler throws, input must still recover.
+      const mode = this.inkMode
       this.penUpAt = this.lastInkT
       this.inkPointer = null
       this.inkMode = null
+      this.inkKind = null
       this.lastErase = null
+      this.endInk(mode, phase === 'cancel')
     }
   }
 
@@ -146,21 +178,24 @@ export class InputController {
     const { phase, id, samples } = event
     const last = samples[samples.length - 1]
     if (this.grab !== null && id === this.grab) {
+      if (last) this.grabT = last.t
       if (last && phase === 'move') this.handlers.selectMove?.(this.toPageSample(last))
       if (phase === 'up' || phase === 'cancel') {
-        if (last && phase === 'up') this.handlers.selectMove?.(this.toPageSample(last))
-        this.handlers.selectEnd?.(phase === 'cancel')
         this.grab = null
+        try { if (last && phase === 'up') this.handlers.selectMove?.(this.toPageSample(last)) } finally { this.handlers.selectEnd?.(phase === 'cancel') }
       }
       return
     }
     if (phase === 'down') {
+      // A drag whose finger has been silent for seconds was lost (no up/cancel ever arrived); do not let it block everything.
+      if (this.grab !== null && last && last.t - this.grabT > 1500) this.cancelAll()
       if (this.inkPointer !== null || this.grab !== null) { this.ignored.add(id); return }
       if (!last) return
       if (!this.touches.size && !this.readOnly && this.tool === 'select') {
         const page = this.toPageSample(last)
         if (this.handlers.touchGrab?.(page, last)) {
           this.grab = id
+          this.grabT = last.t
           this.handlers.selectBegin?.(page, last, 'touch')
           return
         }

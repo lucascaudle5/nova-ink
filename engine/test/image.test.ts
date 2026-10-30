@@ -256,3 +256,68 @@ test('select tool: a finger that lands on a picture drags it; elsewhere it still
   send('down', 'touch', 7, 10, 10, 20000)
   assert.ok(!log.some(l => l.startsWith('begin')), 'read-only never grabs')
 })
+
+test('input recovers: a throwing end handler, a lost pen, a lost finger drag and cancelAll never leave it wedged', () => {
+  const log: string[] = []
+  const camera = { x: 0, y: 0, z: 1 }
+  let throwOnEnd = false
+  const handlers: InputHandlers = {
+    getCamera: () => camera, setCamera: () => log.push('camera'),
+    strokeBegin: () => log.push('stroke'), strokeExtend: () => {}, strokeEnd: () => log.push('strokeEnd'),
+    eraseBegin: () => {}, eraseAt: () => {}, eraseEnd: () => {},
+    touchGrab: () => true,
+    selectBegin: () => log.push('begin'), selectMove: () => {},
+    selectEnd: cancelled => { log.push(cancelled ? 'cancel' : 'end'); if (throwOnEnd) throw new Error('boom') },
+    undo: () => {}, redo: () => {},
+  }
+  const input = new InputController(handlers)
+  const send = (phase: 'down' | 'move' | 'up', kind: 'pen' | 'touch', id: number, x: number, y: number, t: number) =>
+    input.handle({ phase, kind, id, button: 0, samples: [{ x, y, pressure: 0.5, t }] })
+
+  // an end handler that throws must not leave the pen stuck down
+  input.tool = 'select'
+  throwOnEnd = true
+  send('down', 'pen', 1, 5, 5, 1000)
+  assert.throws(() => send('up', 'pen', 1, 5, 5, 1100))
+  assert.equal(input.inking, false)
+  throwOnEnd = false
+  input.tool = 'pen'
+  send('down', 'pen', 2, 5, 5, 2000)
+  assert.ok(log.includes('stroke'), 'the pen can draw again')
+  // the pen is lost (no up), then a new pen id arrives: the lost one is cancelled and the new one starts
+  log.length = 0
+  send('down', 'pen', 3, 9, 9, 3000)
+  assert.deepEqual(log, ['strokeEnd', 'stroke'])
+  send('up', 'pen', 3, 9, 9, 3100)
+
+  // a finger drag whose up never came: after a quiet spell a new finger recovers
+  input.tool = 'select'
+  log.length = 0
+  send('down', 'touch', 7, 10, 10, 10000)
+  send('down', 'touch', 8, 50, 50, 10200)
+  assert.equal(log.filter(l => l === 'begin').length, 1, 'inside the quiet limit the second finger is ignored')
+  send('down', 'touch', 6, 80, 80, 20000)
+  assert.deepEqual(log.filter(l => l === 'cancel' || l === 'begin'), ['begin', 'cancel', 'begin'], 'the stale drag is cancelled and the new finger grabs')
+
+  // cancelAll drops everything and leaves input usable
+  input.cancelAll()
+  assert.equal(input.inking, false)
+  assert.equal(input.navigating, false)
+  log.length = 0
+  send('down', 'touch', 5, 10, 10, 30000)
+  assert.deepEqual(log, ['begin'])
+})
+
+test('committing a picture drag swaps in a new placement with a new id (a drag result may carry the old id)', () => {
+  const doc = new InkDocument(), history = new History(doc)
+  const item = createImage({ image: 'pic', x: 0, y: 0, w: 100, h: 50 })
+  history.insertImages([item])
+  for (const mode of ['move', 'resize', 'rotate'] as const) {
+    const current = doc.images[0]
+    const place = dragPlacement(current, mode, { x: 50, y: 25 }, { x: 80, y: 60 })
+    const next = placeImage(current, { ...current, ...place })
+    assert.notEqual(next.id, current.id)
+    assert.ok(history.replaceImage(current.id, next), mode)
+  }
+  assert.equal(doc.images.length, 1)
+})

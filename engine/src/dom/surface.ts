@@ -169,6 +169,12 @@ export class InkSurface {
     on('pointermove', e => this.onPointer('move', e), { passive: false })
     on('pointerup', e => this.onPointer('up', e), { passive: false })
     on('pointercancel', e => this.onPointer('cancel', e), { passive: false })
+    // A pointer we lost without a pointerup (capture taken away, the app backgrounded) must not leave input wedged.
+    on('lostpointercapture', e => this.onPointer('cancel', e))
+    const dropAll = () => { this.input.cancelAll(); this.endInteraction('touch'); this.invalidateScene(); this.needsLive = true; this.schedule() }
+    window.addEventListener('blur', dropAll)
+    document.addEventListener('visibilitychange', dropAll)
+    this.cleanup.push(() => { window.removeEventListener('blur', dropAll); document.removeEventListener('visibilitychange', dropAll) })
     on('wheel', e => this.onWheel(e), { passive: false })
     on('contextmenu', e => e.preventDefault())
     // Safari's own pinch-to-zoom of the page.

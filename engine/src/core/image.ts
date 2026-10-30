@@ -57,7 +57,9 @@ export function createImage(input: ImageInput): ImageItem {
 
 /** The same picture at a new place (any of x, y, w, h, angle may change): a new placement with a new id. */
 export function placeImage(item: ImageItem, place: Partial<Placement>): ImageItem {
-  return createImage({ image: item.image, author: item.author, x: item.x, y: item.y, w: item.w, h: item.h, angle: item.angle, ...place })
+  // Only the placement is taken from place: it may be a whole picture (a drag keeps one), and its id must not carry over.
+  const { x, y, w, h, angle } = { x: item.x, y: item.y, w: item.w, h: item.h, angle: item.angle, ...place }
+  return createImage({ image: item.image, author: item.author, x, y, w, h, angle })
 }
 
 /** The picture turned `degrees` (default a quarter, clockwise) about its centre: a new placement. */
