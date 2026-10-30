@@ -437,7 +437,7 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
         uri: ENGINE_UI_URI,
         mimeType: RESOURCE_MIME_TYPE,
         text: ENGINE_WIDGET_HTML.replaceAll(ASSET_ORIGIN_MARK, assetOrigin),
-        _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'fullscreen' }, ui: { csp: { resourceDomains: assetOrigin ? [assetOrigin] : [], connectDomains: [] } } },
+        _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'fullscreen' }, ui: { csp: { resourceDomains: assetOrigin ? [assetOrigin, 'data:'] : [], connectDomains: assetOrigin ? [assetOrigin] : [] } } },
       }],
     }
   })

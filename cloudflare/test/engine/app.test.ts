@@ -53,7 +53,7 @@ describe('engine tools', () => {
     const content = resource.body.result.contents[0]
     expect(content.text).toMatch(/<(!doctype|html)/i)
     expect(content.text).not.toContain('__NOVA_ASSET_ORIGIN__')
-    expect(content._meta.ui.csp).toEqual({ resourceDomains: [ORIGIN], connectDomains: [] })
+    expect(content._meta.ui.csp).toEqual({ resourceDomains: [ORIGIN, 'data:'], connectDomains: [ORIGIN] })
   })
 
   it('serves pdf.js (public library code) for PDF import without sign-in, and nothing else under /assets/pdfjs/', async () => {

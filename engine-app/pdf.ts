@@ -4,6 +4,10 @@
  * nova-asset-origin meta tag and declares it to the host's CSP) or, in the local preview, from node_modules.
  * pdf.js runs on the main thread: importing its worker module registers the in-page handler, so no Worker
  * (which a sandboxed frame could not start from another origin) is needed.
+ *
+ * Some hosts (Gemini's MCP Apps) allow only inline scripts in the notebook's frame and refuse a script from another
+ * address. When the direct import fails, the module text is fetched and imported from a data: URL instead (the host
+ * must list the Worker in connectDomains and data: in resourceDomains, which the Worker declares).
  */
 import type * as PdfJs from 'pdfjs-dist'
 
@@ -28,14 +32,38 @@ function pdfjsBase(): string | null {
   return /^https:\/\/[^/]+$/.test(origin) ? `${origin}/assets/pdfjs/` : null
 }
 
+function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
+
+/** Imports a module script: directly, and if the host refuses that, by fetching the text and importing it as a data: URL. */
+export async function importScript(
+  url: string,
+  direct: (url: string) => Promise<unknown> = u => import(/* @vite-ignore */ u),
+  get: (url: string) => Promise<Response> = u => fetch(u),
+): Promise<unknown> {
+  try { return await direct(url) } catch (first) {
+    let text: string
+    try {
+      const res = await get(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      text = await res.text()
+    } catch { throw first }
+    return await direct(`data:text/javascript;base64,${toBase64(text)}`)
+  }
+}
+
 let loading: Promise<PdfLib> | null = null
 function loadPdfjs(): Promise<PdfLib> {
   if (!loading) {
     loading = (async () => {
       const base = pdfjsBase()
       if (!base) throw new Error('PDF import is not available in this copy of the notebook')
-      await import(/* @vite-ignore */ `${base}pdf.worker.min.mjs`)
-      return await import(/* @vite-ignore */ `${base}pdf.min.mjs`) as PdfLib
+      await importScript(`${base}pdf.worker.min.mjs`)
+      return await importScript(`${base}pdf.min.mjs`) as PdfLib
     })()
     loading.catch(() => { loading = null })
   }
