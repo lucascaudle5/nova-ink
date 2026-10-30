@@ -25,3 +25,7 @@ coverage/
 
 # Logs
 *.log
+
+# Browser test failure screenshots
+engine-app/browser-test/out/
+

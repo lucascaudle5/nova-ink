@@ -132,8 +132,8 @@ export class InputController {
     const { phase, id, samples } = event
     if (samples.length && (phase === 'down' ? this.inkPointer === null : id === this.inkPointer)) this.lastInkT = samples[samples.length - 1].t
     if (phase === 'down') {
-      // A second pen or mouse pointer cannot start while the first is down, so the first one must have been lost.
-      if (this.inkPointer !== null && this.inkKind === event.kind && id !== this.inkPointer) this.cancelAll()
+      // A pointer cannot go down twice, and there is one pen and one mouse, so the earlier one must have been lost.
+      if (this.inkPointer !== null && (id === this.inkPointer || this.inkKind === event.kind)) this.cancelAll()
       if (this.readOnly || this.inkPointer !== null || (event.kind === 'mouse' && (event.button ?? 0) !== 0) || !samples.length) return
       if (this.grab !== null) { const lost = this.grab; this.grab = null; this.ignored.add(lost); this.handlers.selectEnd?.(true) }
       for (const touchId of this.touches.keys()) this.ignored.add(touchId)

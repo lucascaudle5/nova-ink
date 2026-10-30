@@ -17,7 +17,8 @@
     "restore": "node scripts/restore-data.mjs",
     "dev:engine-app": "vite -c engine-app/vite.config.ts",
     "build:engine-app": "tsc -p engine-app && vite build -c engine-app/vite.config.ts",
-    "test:engine-app": "node --import tsx --test --test-force-exit engine-app/test/*.test.ts"
+    "test:engine-app": "node --import tsx --test --test-force-exit engine-app/test/*.test.ts",
+    "test:browser": "node engine-app/browser-test/run.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

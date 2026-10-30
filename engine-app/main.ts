@@ -825,7 +825,6 @@ function askSheet() {
     if (sent) question.value = ''
   }, 'text primary')
   openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), send])
-  setTimeout(() => question.focus())
 }
 $('ask-button').addEventListener('click', askSheet)
 
