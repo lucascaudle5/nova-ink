@@ -26,7 +26,16 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<
   return node
 }
 
-export function mountTools(surface: InkSurface, options: { storagePrefix: string; onOpenPopover?: () => void }): Tools {
+export interface ToolsOptions {
+  storagePrefix: string
+  onOpenPopover?: () => void
+  /** Tapping the tool that is already selected. Return true when handled (the app opens its own panel). */
+  onReselect?: (tool: Tool, button: HTMLElement) => boolean
+  /** The pen's current ink color (as shown on this paper) and width, whenever either changes. */
+  onPenStyle?: (color: string, width: number) => void
+}
+
+export function mountTools(surface: InkSurface, options: ToolsOptions): Tools {
   const PRESETS_KEY = `${options.storagePrefix}:presets:v1`
   const ERASER_KEY = `${options.storagePrefix}:eraser:v1`
 
@@ -64,6 +73,7 @@ export function mountTools(surface: InkSurface, options: { storagePrefix: string
 
   function renderSlots() {
     const color = shown(currentStyle(presets).color)
+    options.onPenStyle?.(color, currentStyle(presets).width)
     $('width-slots').replaceChildren(...presets.widths.map((width, index) => {
       const button = el('button', { className: index === presets.widthIndex ? 'current' : '', title: `Width ${width.toFixed(1)}` })
       button.append(el('span', { className: 'line' }, { height: lineHeight(width), background: color }))
@@ -172,6 +182,7 @@ export function mountTools(surface: InkSurface, options: { storagePrefix: string
     button.addEventListener('click', () => {
       const tool = button.dataset.tool as Tool
       if (tool === 'eraser' && surface.tool === 'eraser') togglePopover('eraser', button, buildEraserEditor)
+      else if (surface.tool === tool && options.onReselect?.(tool, button)) { /* handled by the app */ }
       else { closePopover(); surface.setTool(tool) }
     })
   }

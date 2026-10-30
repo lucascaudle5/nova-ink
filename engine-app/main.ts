@@ -57,7 +57,56 @@ function closePanels(except?: HTMLElement) {
     button.setAttribute('aria-expanded', 'false')
   }
 }
-const tools = mountTools(surface, { storagePrefix: 'nova-ink-engine-app', onOpenPopover: () => closePanels() })
+const rail = $<HTMLElement>('rail')
+const railHandle = $<HTMLElement>('rail-handle')
+const penFlyout = $<HTMLElement>('pen-flyout')
+const penDot = $<HTMLElement>('pen-dot')
+const RAIL_KEY = 'nova-ink-engine-app:rail-collapsed'
+
+const tools = mountTools(surface, {
+  storagePrefix: 'nova-ink-engine-app',
+  onOpenPopover: () => closePanels(),
+  // Tapping the pen again opens its width and color presets beside the tool rail.
+  onReselect: (tool, button) => {
+    if (tool !== 'pen') return false
+    showPenFlyout(penFlyout.hidden, button)
+    return true
+  },
+  onPenStyle: color => { penDot.style.background = color },
+})
+
+// ---- Tool rail (left edge): pen, eraser, select, undo, redo; can be hidden down to one small button ----
+
+function showPenFlyout(open: boolean, anchor?: HTMLElement) {
+  if (open) {
+    closePanels()
+    tools.closePopover()
+    const rect = (anchor ?? document.querySelector<HTMLElement>('button[data-tool="pen"]')!).getBoundingClientRect()
+    penFlyout.style.left = `${rect.right + 10}px`
+    penFlyout.style.top = `${rect.top}px`
+  }
+  penFlyout.hidden = !open
+  document.querySelector('button[data-tool="pen"]')?.classList.toggle('flyout-open', open)
+}
+
+function setRailCollapsed(collapsed: boolean) {
+  rail.hidden = collapsed
+  railHandle.hidden = !collapsed
+  if (collapsed) { showPenFlyout(false); tools.closePopover() }
+  writeStored(RAIL_KEY, collapsed ? '1' : '0')
+}
+$('rail-collapse').addEventListener('click', () => setRailCollapsed(true))
+$('rail-expand').addEventListener('click', () => setRailCollapsed(false))
+if (readStored(RAIL_KEY) === '1') setRailCollapsed(true)
+
+// The flyout closes when you tap anywhere else (the width/color editor popover counts as inside), switch tool, or press Escape.
+document.addEventListener('pointerdown', e => {
+  const target = e.target as Element
+  if (penFlyout.hidden || penFlyout.contains(target) || target.closest('#preset-editor') || target.closest('button[data-tool="pen"]')) return
+  showPenFlyout(false)
+})
+surface.onChange(() => { if (!penFlyout.hidden && surface.tool !== 'pen') showPenFlyout(false) })
+window.addEventListener('keydown', e => { if (e.key === 'Escape') showPenFlyout(false) })
 
 const editor: PageEditor = {
   items: () => [...surface.doc.images, ...surface.doc.strokes],
@@ -73,7 +122,7 @@ const editor: PageEditor = {
   setReadOnly(readOnly) {
     surface.readOnly = readOnly
     document.body.classList.toggle('read-only', readOnly)
-    for (const b of document.querySelectorAll<HTMLButtonElement>('.toolbar button, #page, #insert-image')) b.disabled = readOnly
+    for (const b of document.querySelectorAll<HTMLButtonElement>('.rail button:not(#rail-collapse):not(#rail-expand), #page, #insert-image')) b.disabled = readOnly
     if (readOnly) tools.closePopover()
   },
 }

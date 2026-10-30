@@ -2,10 +2,24 @@
 html, body { overflow: hidden; }
 body { min-height: 480px; }
 
-.toolbar { max-width: calc(100vw - 540px); }
-@media (max-width: 1100px) {
-  .toolbar { top: calc(var(--top) + 56px); max-width: calc(100vw - 24px); }
+/* Drawing tools: a vertical rail on the left edge under the top bar, so the top row only holds navigation and actions. */
+.rail { top: calc(var(--top) + 64px); left: max(12px, env(safe-area-inset-left)); flex-direction: column; gap: 2px; }
+.rail .sep { width: 24px; height: 1px; margin: 5px 0; }
+.rail button.pen-tool { position: relative; }
+.pen-dot { position: absolute; right: 5px; bottom: 5px; width: 11px; height: 11px; border-radius: 50%; background: #1b1f24; box-shadow: 0 0 0 2px #fff, inset 0 0 0 1px rgba(0, 0, 0, .2); }
+.rail button.pen-tool.flyout-open::after { content: ""; position: absolute; right: 1px; top: 50%; margin-top: -3px; border: 3px solid transparent; border-left-color: currentColor; }
+.pen-flyout { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 12px; transform-origin: left top; }
+.pen-flyout .fly-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.pen-flyout .fly-label:not(:first-child) { margin-top: 6px; }
+.pen-flyout .slots button {
+  flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 11px; background: transparent; color: #3d434b;
+  display: grid; place-items: center;
 }
+.pen-flyout .slots button.current { background: #eef0f3; }
+.pen-flyout #color-slots button.current { background: transparent; }
+body.dark-paper .pen-flyout .slots button { color: #c9cfd6; }
+body.dark-paper .pen-flyout .slots button.current { background: rgba(255, 255, 255, .09); }
+body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(255, 255, 255, .25); }
 
 .pagesbar { left: max(12px, env(safe-area-inset-left)); }
 .floating button.pages-button { width: auto; max-width: 220px; padding: 0 10px 0 8px; gap: 8px; display: flex; align-items: center; }
@@ -169,3 +183,4 @@ body.dark-paper .status .actions button, body.dark-paper .pages button.text, bod
 
 /* ChatGPT's full-screen composer covers the bottom centre (about 56 px tall plus margin): lift the status above it and let it use the width. */
 body.host-composer .status { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 68px); max-width: calc(100vw - 24px); flex-wrap: wrap; border-radius: 18px; }
+body.host-composer .image-bar { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 124px); }
