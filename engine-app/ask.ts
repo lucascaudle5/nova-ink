@@ -11,14 +11,18 @@ export const HELP_LEVELS: Record<HelpLevel, { label: string; instruction: string
 }
 export const HELP_ORDER: readonly HelpLevel[] = ['nudge', 'concept', 'next', 'check']
 
+/** What the picture covers: what is on screen now, or the whole page fitted to its content. */
+export type AskScope = 'screen' | 'page'
+
 /** Shown in the sheet before sending. */
-export const ASK_DISCLOSURE = 'ChatGPT will see what is on screen now.'
+export const ASK_DISCLOSURE = 'Send shows ChatGPT what is on screen now. "Show NOVA the entire canvas" shows the whole page instead.'
 
 export const MAX_QUESTION = 1200
 /** Largest base64 image the message may carry. */
 export const MAX_IMAGE_BASE64 = 3_000_000
 
 export interface AskInput {
+  scope: AskScope
   notebook: string
   pageTitle: string
   /** 1-based position among the notebook's pages, and how many there are. */
@@ -27,6 +31,7 @@ export interface AskInput {
   paper: { color: string; pattern: string }
   /** Camera zoom, 1 = 100%. */
   zoom: number
+  /** Strokes and pictures in the picture: those in view for 'screen', all of them for 'page'. */
   visibleStrokes: number
   visiblePictures: number
   helpLevel: HelpLevel
@@ -36,10 +41,12 @@ export interface AskInput {
 
 export interface AskContext {
   source: 'nova-ink-engine'
+  scope: AskScope
   notebook: string
   page: { title: string; number: number; of: number; paper: string }
   zoomPercent: number
-  visible: { strokes: number; pictures: number }
+  /** Counts in the picture sent. */
+  shown: { strokes: number; pictures: number }
   helpLevel: string
   /** Null when the student added no note. */
   note: string | null
@@ -49,10 +56,11 @@ export interface AskContext {
 export function askContext(input: AskInput): AskContext {
   return {
     source: 'nova-ink-engine',
+    scope: input.scope,
     notebook: input.notebook,
     page: { title: input.pageTitle, number: input.pageNumber, of: input.pageCount, paper: `${input.paper.color} ${input.paper.pattern}` },
     zoomPercent: Math.round(input.zoom * 100),
-    visible: { strokes: input.visibleStrokes, pictures: input.visiblePictures },
+    shown: { strokes: input.visibleStrokes, pictures: input.visiblePictures },
     helpLevel: HELP_LEVELS[input.helpLevel].label,
     note: input.question.trim().slice(0, MAX_QUESTION) || null,
   }
@@ -62,7 +70,9 @@ export function askContext(input: AskInput): AskContext {
 export function askText(input: AskInput): string {
   const context = askContext(input)
   return [
-    'Student-initiated request from NOVA Ink. The picture is exactly what is on the student\'s screen now.',
+    input.scope === 'page'
+      ? 'Student-initiated request from NOVA Ink. The picture is the student\'s entire canvas for this page: everything on it, fitted to its content, not just what was on screen.'
+      : 'Student-initiated request from NOVA Ink. The picture is exactly what is on the student\'s screen now.',
     `Help level: ${context.helpLevel}. ${HELP_LEVELS[input.helpLevel].instruction}`,
     'Do not draw on or change the notebook, and do not offer more help than this level.',
     context.note ? `Student's note: ${context.note}` : 'The student added no note; answer for the chosen help level from what is on screen.',
@@ -71,9 +81,14 @@ export function askText(input: AskInput): string {
 }
 
 /** A reason nothing should be sent, or null when the request is fine. A note is optional. */
-export function askRefusal(input: { visibleStrokes: number; visiblePictures: number }, imageBase64Length: number | null): string | null {
-  if (input.visibleStrokes + input.visiblePictures === 0) return 'There is no work on screen to show ChatGPT. Pan to your work first.'
-  if (imageBase64Length !== null && imageBase64Length > MAX_IMAGE_BASE64) return 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.'
+export function askRefusal(input: { scope: AskScope; visibleStrokes: number; visiblePictures: number }, imageBase64Length: number | null): string | null {
+  const page = input.scope === 'page'
+  if (input.visibleStrokes + input.visiblePictures === 0) return page ? 'This page is empty, so there is nothing to show ChatGPT.' : 'There is no work on screen to show ChatGPT. Pan to your work first.'
+  if (imageBase64Length !== null && imageBase64Length > MAX_IMAGE_BASE64) {
+    return page
+      ? 'The picture of the whole page is too large to send (over 3 MB), even shrunk. Use Send instead, zoomed on the part you want checked.'
+      : 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.'
+  }
   return null
 }
 

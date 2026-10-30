@@ -78,6 +78,8 @@ async function evaluate(expression) {
   return r.result.result.value
 }
 const json = async expression => JSON.parse(await evaluate(`JSON.stringify(${expression})`))
+/** Like json, for an expression that is a promise. */
+const jsonAsync = async expression => JSON.parse(await evaluate(`(async () => JSON.stringify(await (${expression})))()`))
 
 // ---- input helpers ----
 
@@ -127,6 +129,7 @@ async function drawStroke(y = 700, pointerType = 'pen') { await drag(line([200, 
 const assert = {
   ok(value, message) { if (!value) throw new Error(message) },
   equal(actual, expected, message) { if (actual !== expected) throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`) },
+  deepEqual(actual, expected, message) { if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`) },
   near(actual, expected, tolerance, message) { if (!(Math.abs(actual - expected) <= tolerance)) throw new Error(`${message}: expected about ${expected}, got ${actual}`) },
 }
 
@@ -307,6 +310,38 @@ await test('Ask NOVA with nothing on screen refuses instead of sending', async (
   assert.ok(/no work on screen/i.test(await evaluate('document.querySelector("#sheet .ask-result").textContent')), 'the sheet says why')
 })
 
+await test('Show NOVA the entire canvas sends the whole page, even when most of it is off screen; an empty page refuses', async () => {
+  const sheetButton = label => evaluate(`[...document.querySelectorAll("#sheet button")].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  // empty page first
+  await clickSel('#ask-button'); await sleep(300)
+  await sheetButton('Show NOVA the entire canvas'); await sleep(500)
+  assert.equal((await json('window.novaAskLog')).length, 0, 'an empty page sends nothing')
+  assert.ok(/page is empty/i.test(await evaluate('document.querySelector("#sheet .ask-result").textContent')), 'and says why')
+  await evaluate('[...document.querySelectorAll("#sheet button")].find(b => b.textContent.trim() === "Close").click()'); await sleep(200)
+  // two strokes far apart, then look at only one of them
+  await drag(line([200, 400], [300, 450]), 'pen')
+  await evaluate('novaSurface.setCamera({ x: 3000, y: 2000, z: 1 })'); await sleep(200)
+  await drag(line([300, 300], [400, 360]), 'pen')
+  assert.equal(await strokeCount(), 2, 'two strokes, thousands of units apart')
+  await evaluate('novaSurface.setCamera({ x: 3000, y: 2000, z: 1 })'); await sleep(200)
+  const before = await camera()
+  await clickSel('#ask-button'); await sleep(300)
+  await sheetButton('Show NOVA the entire canvas'); await sleep(2500)
+  const log = await json('window.novaAskLog')
+  assert.equal(log.length, 1, 'one message was sent')
+  const text = log[0].content.find(c => c.type === 'text').text
+  assert.ok(text.includes('entire canvas') && text.includes('"scope":"page"'), 'it says it is the entire canvas')
+  assert.ok(/"shown":\{"strokes":2,/.test(text), 'both strokes are counted, not only the one in view')
+  assert.ok(log[0].content.some(c => c.type === 'image' && c.bytes > 1000), 'the picture is attached')
+  assert.deepEqual(await camera(), before, 'the camera did not move')
+  // the picture itself covers both strokes and stays inside 4000 px
+  const size = await jsonAsync(`(async () => { const bitmap = await createImageBitmap(await novaSurface.exportPage()); return [bitmap.width, bitmap.height] })()`)
+  assert.ok(Math.max(...size) <= 4000 && Math.max(...size) > 1000, `a large page fills most of the allowed size (${size})`)
+  assert.ok(size[0] > size[1], 'the page is wider than tall, like its content')
+  // the two corners of the picture are inked: sample dark pixels near both ends of the diagonal
+  const ink = await jsonAsync(`(async () => { const b = await createImageBitmap(await novaSurface.exportPage()); const c = document.createElement('canvas'); c.width = b.width; c.height = b.height; const x = c.getContext('2d'); x.drawImage(b, 0, 0); const dark = (cx, cy, r) => { const d = x.getImageData(Math.max(0, cx - r), Math.max(0, cy - r), 2 * r, 2 * r).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 90 && d[i + 1] < 90) n++; return n }; return [dark(Math.round(b.width * 0.03), Math.round(b.height * 0.03), 60), dark(Math.round(b.width * 0.97), Math.round(b.height * 0.97), 60)] })()`)
+  assert.ok(ink[0] > 0 && ink[1] > 0, `ink shows at both ends of the page picture (${ink})`)
+})
 await test('the tool rail: second tap opens the pen options, hide and show persist', async () => {
   await clickSel('button[data-tool="pen"]'); await sleep(250)
   assert.equal(await evaluate('document.getElementById("pen-flyout").hidden'), false, 'tapping the pen again opens width and colour')

@@ -5,7 +5,7 @@ import type { AskInput } from '../ask'
 
 const input: AskInput = {
   notebook: 'Dynamics', pageTitle: 'HW 6', pageNumber: 3, pageCount: 5, paper: { color: 'cream', pattern: 'graph' },
-  zoom: 1.256, visibleStrokes: 42, visiblePictures: 1, helpLevel: 'check', question: '  Is my free-body diagram right?  ',
+  scope: 'screen' as const, zoom: 1.256, visibleStrokes: 42, visiblePictures: 1, helpLevel: 'check', question: '  Is my free-body diagram right?  ',
 }
 
 test('context describes the page, zoom, counts, level and trimmed question, and carries no coordinates', () => {
@@ -13,7 +13,7 @@ test('context describes the page, zoom, counts, level and trimmed question, and 
   assert.deepEqual(context, {
     source: 'nova-ink-engine', notebook: 'Dynamics',
     page: { title: 'HW 6', number: 3, of: 5, paper: 'cream graph' },
-    zoomPercent: 126, visible: { strokes: 42, pictures: 1 }, helpLevel: 'Check my work', note: 'Is my free-body diagram right?',
+    scope: 'screen', zoomPercent: 126, shown: { strokes: 42, pictures: 1 }, helpLevel: 'Check my work', note: 'Is my free-body diagram right?',
   })
   assert.equal(JSON.stringify(context).includes('points'), false)
 })
@@ -52,7 +52,7 @@ test('the message is the text followed by the PNG', () => {
 })
 
 test('nothing is sent for an empty view or an image over 3 MB; an empty note is fine', () => {
-  const ok = { visibleStrokes: 1, visiblePictures: 0 }
+  const ok = { scope: 'screen' as const, visibleStrokes: 1, visiblePictures: 0 }
   assert.equal(askRefusal(ok, 1000), null)
   assert.match(askRefusal({ ...ok, visibleStrokes: 0 }, 1000)!, /no work on screen/)
   assert.equal(askRefusal({ ...ok, visibleStrokes: 0, visiblePictures: 1 }, 1000), null, 'a picture alone is work')
@@ -61,5 +61,17 @@ test('nothing is sent for an empty view or an image over 3 MB; an empty note is 
 })
 
 test('the disclosure says ChatGPT sees what is on screen', () => {
-  assert.equal(ASK_DISCLOSURE, 'ChatGPT will see what is on screen now.')
+  assert.ok(ASK_DISCLOSURE.includes('what is on screen now') && ASK_DISCLOSURE.includes('entire canvas'))
+})
+
+test('the whole-page scope says the picture is the entire canvas, and refuses an empty page in its own words', () => {
+  const page = { ...input, scope: 'page' as const, visibleStrokes: 300, visiblePictures: 2 }
+  const text = askText(page)
+  assert.ok(text.includes('entire canvas'), 'the model is told it is the whole canvas')
+  assert.ok(!text.includes('exactly what is on the student'), 'and not just the screen')
+  assert.equal(askContext(page).scope, 'page')
+  assert.equal(askContext(page).shown.strokes, 300)
+  assert.match(askRefusal({ scope: 'page', visibleStrokes: 0, visiblePictures: 0 }, null)!, /page is empty/)
+  assert.match(askRefusal({ scope: 'page', visibleStrokes: 1, visiblePictures: 0 }, MAX_IMAGE_BASE64 + 1)!, /whole page is too large/)
+  assert.ok(askText(input).includes('exactly what is on the student'), 'the screen scope still says so')
 })

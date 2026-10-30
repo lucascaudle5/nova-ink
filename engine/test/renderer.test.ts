@@ -163,3 +163,39 @@ test('exportView composes paper, pictures and ink on throwaway canvases and neve
   assert.equal(exportScale(3000, 2000), 1600 / 3000)
   assert.equal(exportScale(100, 100), 2)
 })
+
+test('composePage draws everything on the page, wherever the camera is, within 4000 px, and is null for an empty page', async () => {
+  const { composePage, pageArea, PAGE_EXPORT_MARGIN } = await import('../src/render/export')
+  const { InkDocument } = await import('../src/core/document')
+  const options = { createPath: () => ({}), imageSource: () => ({}) as never }
+  const made: Array<CanvasLike & { ctx: FakeContext }> = []
+  const makeCanvas = () => { const c = fakeCanvas(); made.push(c); return c }
+  const empty = new InkDocument()
+  assert.equal(composePage({ doc: empty, paper: { color: 'white', pattern: 'blank' }, options, makeCanvas }), null)
+  assert.equal(pageArea(empty), null)
+
+  const doc = new InkDocument()
+  const strokes = generateStrokes(10)
+  // content far apart: a page far larger than any screen
+  doc.load(strokes, [createImage({ image: 'pic1', x: 5000, y: 3000, w: 400, h: 300 })])
+  const content = doc.contentBounds()!
+  const area = pageArea(doc)!
+  assert.deepEqual(area, { minX: content.minX - PAGE_EXPORT_MARGIN, minY: content.minY - PAGE_EXPORT_MARGIN, maxX: content.maxX + PAGE_EXPORT_MARGIN, maxY: content.maxY + PAGE_EXPORT_MARGIN })
+  const page = composePage({ doc, paper: { color: 'dark', pattern: 'blank' }, options, makeCanvas })!
+  assert.equal(page.strokes, doc.size, 'every stroke is drawn')
+  assert.equal(page.images, 1, 'every picture is drawn')
+  assert.ok(Math.max(page.canvas.width, page.canvas.height) <= 4000, 'long side is within the cap')
+  assert.ok(Math.max(page.canvas.width, page.canvas.height) >= 3999, 'a big page fills the cap')
+  const [paperLayer, base, live, snapshot] = made.slice(-4)
+  assert.equal(page.canvas, paperLayer)
+  assert.equal(paperLayer.ctx.fillStyle, '#16181c', 'the paper colour is the background')
+  assert.equal(base.ctx.images.length, 1, 'the picture is drawn')
+  assert.deepEqual(live.ctx.calls, [], 'no live stroke, selection frame or eraser ring')
+  assert.deepEqual([live.width, live.height, snapshot.width, snapshot.height], [1, 1, 1, 1], 'unused layers hold no memory')
+
+  // a small page is not blown up past retina scale
+  const small = new InkDocument()
+  small.load([], [createImage({ image: 'p', x: 0, y: 0, w: 100, h: 50 })])
+  const shown = composePage({ doc: small, paper: { color: 'white', pattern: 'blank' }, options, makeCanvas })!
+  assert.deepEqual([shown.canvas.width, shown.canvas.height], [(100 + 2 * PAGE_EXPORT_MARGIN) * 2, (50 + 2 * PAGE_EXPORT_MARGIN) * 2])
+})

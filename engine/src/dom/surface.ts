@@ -11,7 +11,7 @@ import { Samples } from '../core/metrics'
 import type { Paper } from '../core/paper'
 import { createStroke } from '../core/stroke'
 import type { Camera, ImageItem, Stroke, StrokeStyle } from '../core/types'
-import { composeView, countInView } from '../render/export'
+import { composePage, composeView, countInView } from '../render/export'
 import { CanvasRenderer, createPath2D } from '../render/renderer'
 
 export interface SurfaceMetrics {
@@ -419,6 +419,28 @@ export class InkSurface {
     })
     return new Promise((resolve, reject) => {
       (canvas as HTMLCanvasElement).toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not encode the view.')), 'image/png')
+    })
+  }
+
+  /** Every stroke and picture on the page. */
+  pageCounts(): { strokes: number; images: number } {
+    return { strokes: this.doc.size, images: this.doc.images.length }
+  }
+
+  /**
+   * A PNG of the whole page: everything on it, fitted with a margin over the paper, wherever the camera is
+   * (long side at most `maxSide`, 4000 by default). Drawn on throwaway canvases; the camera and selection are untouched.
+   * Null when the page is empty.
+   */
+  exportPage(maxSide?: number): Promise<Blob> | null {
+    const page = composePage({
+      doc: this.doc, paper: this.paper, maxSide,
+      options: { createPath: createPath2D, imageSource: image => this.imageSource?.(image) ?? null },
+      makeCanvas: () => document.createElement('canvas'),
+    })
+    if (!page) return null
+    return new Promise((resolve, reject) => {
+      (page.canvas as HTMLCanvasElement).toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not encode the page.')), 'image/png')
     })
   }
 

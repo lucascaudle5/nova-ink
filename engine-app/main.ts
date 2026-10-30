@@ -5,8 +5,8 @@ import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
 import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MockServer } from './mock-server'
-import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_QUESTION } from './ask'
-import type { AskInput, HelpLevel } from './ask'
+import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
+import type { AskInput, AskScope, HelpLevel } from './ask'
 import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES } from './pdf'
 import type { PdfDocument, RenderedPdfPage } from './pdf'
 import { NotebookSession } from './session'
@@ -751,12 +751,13 @@ let askSending = false
 const askLog: Array<{ role: string; content: Array<{ type: string; text?: string; mimeType?: string; bytes?: number }> }> = []
 if (preview) Object.assign(window, { novaAskLog: askLog })
 
-function askInput(question: string): AskInput {
+function askInput(question: string, scope: AskScope): AskInput {
   const state = session.getState()
   const notebook = state.notebooks.find(n => n.id === state.notebookId)
   const live = livePages(state)
-  const counts = surface.viewCounts()
+  const counts = scope === 'page' ? surface.pageCounts() : surface.viewCounts()
   return {
+    scope,
     notebook: notebook?.name ?? 'Notebook', pageTitle: session.currentPage?.title ?? 'Page',
     pageNumber: Math.max(1, live.findIndex(p => p.id === state.pageId) + 1), pageCount: live.length,
     paper: surface.paper, zoom: surface.camera.z, visibleStrokes: counts.strokes, visiblePictures: counts.images,
@@ -764,15 +765,31 @@ function askInput(question: string): AskInput {
   }
 }
 
+/** Page pictures are tried at these long-side sizes, largest first, until one fits in the message. */
+const PAGE_SIZES = [4000, 3000, 2000, 1600]
+
+/** The picture to send, as base64 PNG: the screen, or the whole page shrunk until it fits in a message. */
+async function renderForAsk(scope: AskScope): Promise<string> {
+  if (scope === 'screen') return blobToBase64(await surface.exportView())
+  let png = ''
+  for (const side of PAGE_SIZES) {
+    const blob = surface.exportPage(side)
+    if (!blob) throw new Error('This page is empty.')
+    png = await blobToBase64(await blob)
+    if (png.length <= MAX_IMAGE_BASE64) break
+  }
+  return png
+}
+
 /** Student-initiated only: this runs when Send is tapped, never on its own. Reports "Sent" or the reason it was not. */
-async function sendAsk(question: string, say: (text: string, tone?: 'ok' | 'bad') => void): Promise<boolean> {
-  const input = askInput(question)
+async function sendAsk(question: string, scope: AskScope, say: (text: string, tone?: 'ok' | 'bad') => void): Promise<boolean> {
+  const input = askInput(question, scope)
   const early = askRefusal(input, null)
   if (early) { say(early, 'bad'); return false }
-  say('Rendering your work…')
+  say(scope === 'page' ? 'Rendering the whole page…' : 'Rendering your work…')
   let png: string
-  try { png = await blobToBase64(await surface.exportView()) } catch (error) {
-    say(`Could not render the screen, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
+  try { png = await renderForAsk(scope) } catch (error) {
+    say(`Could not render ${scope === 'page' ? 'the page' : 'the screen'}, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
     return false
   }
   // The student may have moved or edited while the picture was prepared; send what the picture shows.
@@ -815,16 +832,18 @@ function askSheet() {
   const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for ChatGPT if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
   const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
   const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
-  const send = action('Send', async () => {
+  const submit = (scope: AskScope) => async () => {
     if (askSending) return
     askSending = true
-    send.disabled = true
-    const sent = await sendAsk(question.value, say)
+    send.disabled = whole.disabled = true
+    const sent = await sendAsk(question.value, scope, say)
     askSending = false
-    send.disabled = false
+    send.disabled = whole.disabled = false
     if (sent) question.value = ''
-  }, 'text primary')
-  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), send])
+  }
+  const send = action('Send', submit('screen'), 'text primary')
+  const whole = action('Show NOVA the entire canvas', submit('page'), 'text')
+  openSheet('Ask NOVA', [label('Help level'), segments, hint, label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), whole, send])
 }
 $('ask-button').addEventListener('click', askSheet)
 
