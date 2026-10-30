@@ -3,7 +3,7 @@
 **Snapshot:** October 29, 2026  
 **Packaged reference:** v0.2.1, user-tested on iPad
 **Current local working copy:** v0.2.3 (branch v0.2.3-reliability); not repackaged or published; iPad acceptance is pending but is not a development gate; the user tests in occasional batches (IPAD_ACCEPTANCE.md)
-**Engine spike:** branch engine/spike (Windows worktree `Documents\GitHub\nova-ink-engine`), package `engine/`; experimental, not wired into the app (see "Engine spike status" below)
+**Engine spike:** branch engine/spike (Windows worktree `Documents\GitHub\nova-ink-engine`), package `engine/`. **Status update, October 30, 2026:** this header and the "Engine spike status" section below were written on October 29 when the engine was local only. Since then the engine and `engine-app/` have been deployed as the separate Cloudflare Worker `nova-ink-engine` (own sign-in, own storage; it does not replace or share data with the v0.2.3 tldraw app) and the user reports using it in the ChatGPT iPad app and that it works well. The newest dated entries at the end of the engine section (deploys, lasso, Choose an area, browser tests) are the current status; older "local only / not deployed" lines are history. Remaining unverified: iPad acceptance of individual features beyond what the user has reported, off-machine backup, and multi-device handoff on the engine app.
 
 ## Mission
 A ChatGPT-integrated engineering notebook for actual coursework. Preserve productive independent problem-solving while allowing student-initiated contextual tutoring.

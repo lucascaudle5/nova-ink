@@ -1,6 +1,6 @@
 # nova-ink-engine (spike)
 
-NOVA-owned handwriting engine, developed in isolation from the working v0.2.3 tldraw app. **Experimental: not used by the NOVA Ink widget, the MCP server or any saved notebook.** Architecture, acceptance criteria and measurements: `docs/ENGINE_ARCHITECTURE.md`. Status lives in `../CODEX_HANDOFF.md`.
+NOVA-owned handwriting engine, developed in isolation from the working v0.2.3 tldraw app. **Not used by the v0.2.3 tldraw app, its MCP server or its saved notebooks. As of October 30, 2026 it powers a separately deployed ChatGPT widget, the Cloudflare Worker `nova-ink-engine` (see `../engine-app/` and `../cloudflare/`), which the user is testing on iPad; treat it as an actively developed prototype.** Architecture, acceptance criteria and measurements: `docs/ENGINE_ARCHITECTURE.md`. Status lives in `../CODEX_HANDOFF.md`.
 
 No runtime dependencies; no tldraw code (its license forbids copying it).
 
