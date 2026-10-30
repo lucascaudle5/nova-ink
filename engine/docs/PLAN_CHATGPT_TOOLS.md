@@ -1,7 +1,7 @@
 # Plan: let ChatGPT see and organize engine notebooks
 
-Status: **draft, October 30, 2026; not started.** Branch `engine/spike`. Written for a coding agent to follow phase by phase.
-Decisions marked **(confirm)** are recommended defaults the user has not yet approved; ask before building them.
+Status: **approved, October 30, 2026; not started.** Branch `engine/spike`. Written for a coding agent to follow phase by phase.
+The user approved all three phases and answered the open questions at the end (October 30, 2026, ~8:45 AM).
 
 ## Why this is next
 
@@ -64,7 +64,7 @@ when the notebook is not open.
    model-visible tool on this connector. Add a throwaway tool behind a test-only flag or test against the local
    mock, and report what happens. If images in tool results do not work, stop and ask the user; the fallback is
    Phase 1 only.
-2. **Page previews (confirm):** after a confirmed save (debounced, at most once every 30 s per page, and on leaving
+2. **Page previews:** after a confirmed save (debounced, at most once every 30 s per page, and on leaving
    a page), the widget renders the whole page's content bounds with step 1.1's renderer to a JPEG (long side
    ≤ 1600 px) and stores it with the existing picture pieces (`nb_put_image`), then records it on the page with a new
    widget-only tool `nb_set_preview { pageId, imageId, revision }`. Add a nullable `preview_image` and
@@ -82,7 +82,7 @@ when the notebook is not open.
 5. Worker tests in `cloudflare/test/engine/` for both tools: ownership (another user's page is NOT_FOUND), trash
    excluded, stale-preview flag, missing scope refused. Checks as above. Stop and report.
 
-## Phase 3: let the model organize (confirm before starting)
+## Phase 3: let the model organize
 
 Goal: "make a Mechanics HW 6 notebook in my Mechanics folder with five graph pages" works from chat.
 
@@ -103,10 +103,8 @@ Goal: "make a Mechanics HW 6 notebook in my Mechanics folder with five graph pag
 - Export pages to PDF (roadmap item 2), not a model tool.
 - Stroke-relative coordinates for the infinite canvas (current engine milestone (b)).
 
-## Open questions for the user
+## User decisions (October 30, 2026)
 
-1. Phase 2: may ChatGPT read any page when the user asks, or only the page open in the notebook? (Recommended: any
-   page, read-only, only on request.)
-2. Phase 2: is storing a preview image of every page on Cloudflare acceptable? (It counts against the same storage
-   as pictures.)
-3. Phase 3: should the model be allowed to create and rename notebooks, folders and pages at all?
+1. Phase 2: ChatGPT may read any page in the library, read-only, only when the user asks.
+2. Phase 2: storing a preview image of every page on Cloudflare is accepted.
+3. Phase 3: the model may create and rename notebooks, folders and pages; never delete or trash them.
