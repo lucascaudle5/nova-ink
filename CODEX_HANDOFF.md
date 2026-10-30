@@ -174,7 +174,8 @@ Engine notebook built locally (October 29, 2026, evening; user: "Yes, start buil
 Engine deployment (build step 6; user: "Yes, deploy now", October 29, 2026, ~9:40 PM):
 - Created KV namespace `OAUTH_KV_ENGINE` (id in `cloudflare/wrangler.engine.jsonc`) and deployed Worker `nova-ink-engine` at https://nova-ink-engine.ai-nova-personal.workers.dev (version 6f0545a5). Verified with curl right after: `/health` = `{"ok":true,"app":"nova-ink-engine","configured":false}`, `/mcp` and `/authorize` = 503 (fails closed without secrets).
 - Created the Access for SaaS (OIDC) app "NOVA Ink engine" in the dashboard (team `nova-dev`): scopes openid/email/profile, redirect `https://nova-ink-engine.ai-nova-personal.workers.dev/callback`, PKCE on, policy "NOVA Owner", login method One-time PIN only.
-- Next: the user sets the six secrets with `npx wrangler secret put <NAME> -c wrangler.engine.jsonc`, then the ChatGPT connector, then the checks (sign-in, refresh after 1 h and next day, CPU, iPad).
+- The user set the six secrets (~9:50 PM). Verified with curl and wrangler: `/health` = `configured:true`, `/mcp` = 401 without a token, `secret list` shows all six names.
+- User-reported (October 29, 2026, ~9:56 PM), desktop ChatGPT in Chrome: the user added the connector (developer mode, OAuth), signed in through Access, opened the notebook and "It worked, the strokes saved." First run of the engine app inside ChatGPT. Not yet: iPad, refresh after 1 h and the next day, CPU numbers (`wrangler tail`), reopening on a second device.
 
 Still open (product owner):
 1. The remaining acceptance targets (ENGINE_ARCHITECTURE.md section 6).
