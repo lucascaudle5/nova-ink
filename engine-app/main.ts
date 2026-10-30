@@ -368,7 +368,7 @@ window.addEventListener('keydown', e => {
   if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && surface.tool === 'select' && surface.selectionCount) { e.preventDefault(); surface.deleteSelection() }
   if (e.key === 'Escape' && !typing && sheet.hidden) { if (surface.tool === 'snip') surface.endSnip(); else if (surface.selectionCount) surface.select(null) }
 })
-if (preview) Object.assign(window, { novaInsertPicture: insertPicture, novaSurface: surface })
+if (preview) Object.assign(window, { novaInsertPicture: insertPicture, novaSurface: surface, novaSession: session })
 
 function plural(n: number, one: string, many = one + 's') { return `${n} ${n === 1 ? one : many}` }
 

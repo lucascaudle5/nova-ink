@@ -69,7 +69,7 @@ export class MockServer {
     const p = this.pages.get(pageId)!
     const existing = p.ops.get(requestId)
     if (existing) return existing.opId
-    const opId = this.id()
+    const opId = crypto.randomUUID()
     p.ops.set(requestId, { opId, ops, status: 'queued', revision: null })
     return opId
   }

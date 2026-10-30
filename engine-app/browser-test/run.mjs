@@ -485,6 +485,140 @@ await test('the tool rail: second tap opens the pen options, hide and show persi
   assert.ok(rail[3] <= corner[1] || rail[4] <= corner[2] || corner[3] <= rail[1] || corner[4] <= rail[2], 'the rail and the top-right buttons do not overlap')
 })
 
+/** A two-page PDF (Letter) with one solid black rectangle per page, so a render can be checked pixel by pixel. */
+function syntheticPdf() {
+  const parts = [], offsets = []
+  let length = 0
+  const add = text => { parts.push(text); length += Buffer.byteLength(text) }
+  add('%PDF-1.4\n')
+  const obj = (n, body) => { offsets[n] = length; add(`${n} 0 obj\n${body}\nendobj\n`) }
+  const page = (n, contents) => obj(n, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contents} 0 R >>`)
+  const stream = (n, text) => obj(n, `<< /Length ${text.length} >>\nstream\n${text}\nendstream`)
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>')
+  obj(2, '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>')
+  page(3, 4); stream(4, '0 0 0 rg 100 600 300 100 re f')
+  page(5, 6); stream(6, '0 0 0 rg 50 50 200 200 re f')
+  const xref = length
+  add(`xref\n0 7\n0000000000 65535 f \n${[1, 2, 3, 4, 5, 6].map(n => `${String(offsets[n]).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)
+  return Buffer.from(parts.join('')).toString('base64')
+}
+
+/** Luminance of one pixel of a stored picture (the mock keeps its pieces as base64). */
+const pixelOf = (imageId, x, y) => evaluate(`(async () => {
+  const e = novaMock.images.get(${JSON.stringify(imageId)})
+  const bytes = Uint8Array.from(atob([...e.pieces.keys()].sort((a, b) => a - b).map(k => e.pieces.get(k)).join('')), c => c.charCodeAt(0))
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: e.mime }))
+  const c = document.createElement('canvas'); c.width = bitmap.width; c.height = bitmap.height
+  const g = c.getContext('2d'); g.drawImage(bitmap, 0, 0)
+  const d = g.getImageData(${x}, ${y}, 1, 1).data
+  return Math.round((d[0] + d[1] + d[2]) / 3)
+})()`)
+
+await test('NOVA draws beside the student\'s work as one undo step; selection, moving, saving and reopening keep it NOVA\'s; a repeated request changes nothing', async () => {
+  await drawStroke(300); await drawStroke(340)
+  const student = await json('novaSurface.doc.strokes.map(s => s.id)')
+  assert.equal(student.length, 2, 'two strokes of the student')
+  await evaluate('novaSession.save()')
+  const cameraBefore = await camera()
+  const draw = [{ op: 'draw', name: 'Free body diagram', place: { relativeTo: 'ink:' + student[0], side: 'right', gap: 80 }, shapes: [
+    { type: 'rect', x: 0, y: 0, w: 70, h: 45 }, { type: 'arrow', x1: 35, y1: 22, x2: 140, y2: 22 }, { type: 'text', x: 144, y: 14, text: 'T' }, { type: 'equation', x: 0, y: 70, text: '\\Sigma F_x = 0' },
+  ] }]
+  await evaluate(`novaMock.enqueueOps(novaMock.first, 'request-browser-1', ${JSON.stringify(draw)})`)
+  assert.equal(await evaluate('novaMock.opStatus(novaMock.first, "request-browser-1").status'), 'queued', 'queued until the open notebook applies it')
+  await evaluate('novaSession.heartbeat()'); await sleep(200)
+  const ai = () => json('novaSurface.doc.strokes.filter(s => s.author === "ai").map(s => ({ id: s.id, group: s.group, x0: s.bounds.minX, x1: s.bounds.maxX, y0: s.bounds.minY, y1: s.bounds.maxY }))')
+  const placed = await ai()
+  assert.ok(placed.length > 10, 'NOVA marks are on the page')
+  assert.equal(new Set(placed.map(s => s.group)).size, 1, 'one group')
+  assert.ok(/^nova-free-body-diagram-[0-9a-f]{8}$/.test(placed[0].group), 'the group has a stable NOVA name')
+  assert.deepEqual(await json('novaSurface.doc.strokes.filter(s => s.author !== "ai").map(s => s.id)'), student, 'the student\'s strokes are untouched, same ids and order')
+  const right = await json('Math.max(...novaSurface.doc.strokes.filter(s => s.author !== "ai" && s.id === ' + JSON.stringify(student[0]) + ').map(s => s.bounds.maxX))')
+  assert.ok(Math.min(...placed.map(s => s.x0)) >= right + 70, 'the drawing starts to the right of the attempt it was placed by')
+  assert.deepEqual(await camera(), cameraBefore, 'the camera did not move')
+  await evaluate('novaSession.heartbeat()'); await sleep(100)
+  assert.equal(await evaluate('novaMock.opStatus(novaMock.first, "request-browser-1").status'), 'applied', 'applied in the notebook (the next heartbeat says so), not yet durable')
+
+  // one undo takes the whole drawing away, one redo brings it back
+  await clickSel('#undo'); await sleep(150)
+  assert.equal((await ai()).length, 0, 'one undo removed all of NOVA\'s marks')
+  assert.equal(await strokeCount(), 2, 'and left the student\'s two strokes')
+  await clickSel('#redo'); await sleep(150)
+  assert.equal((await ai()).length, placed.length, 'one redo brought them back')
+
+  // selecting it says whose it is, and moving it keeps author and group
+  await selectTool()
+  await evaluate(`novaSurface.select(novaSurface.doc.strokes.filter(s => s.author === 'ai').map(s => s.id))`); await sleep(150)
+  assert.ok((await evaluate('document.getElementById("selection-label").textContent')).startsWith('NOVA drawing'), 'the selection bar names it as NOVA\'s')
+  const frame = await json('novaSurface.selectionBox')
+  const [fx, fy] = await toScreen(frame.x + frame.w / 2, frame.y + frame.h / 2)
+  await drag(line([fx, fy], [fx + 60, fy + 40]), 'pen'); await sleep(150)
+  const dragged = await ai()
+  assert.equal(dragged.length, placed.length, 'moving it does not add or lose marks')
+  assert.ok(dragged.every(s => s.group === placed[0].group), 'moved marks stay in their group')
+  assert.ok(Math.abs(Math.min(...dragged.map(s => s.x0)) - Math.min(...placed.map(s => s.x0))) > 20, 'it moved')
+  await clickSel('#undo'); await sleep(150)
+  await penTool()
+
+  // saved: durable, settled on the server, and the reopened page is the same
+  await evaluate('novaSession.save()')
+  assert.equal(await evaluate('novaMock.opStatus(novaMock.first, "request-browser-1").status'), 'saved', 'the save made it durable')
+  assert.equal(await evaluate('novaSession.getState().status'), 'saved', 'status says Saved')
+  await evaluate('novaSession.reload()'); await sleep(300)
+  const reopened = await ai()
+  assert.equal(reopened.length, placed.length, 'reopening keeps every mark')
+  assert.ok(reopened.every(s => s.group === placed[0].group), 'and its group')
+
+  // arranging by conversation: move the whole group by its id; one undo puts it back; a student stroke is never touched
+  await evaluate(`novaMock.enqueueOps(novaMock.first, 'request-browser-2', [{ op: 'move', targets: [${JSON.stringify(placed[0].group)}], dx: 0, dy: 200 }])`)
+  await evaluate('novaSession.heartbeat()'); await sleep(200)
+  const arranged = await ai()
+  assert.near(Math.min(...arranged.map(s => s.y0)) - Math.min(...placed.map(s => s.y0)), 200, 1, 'moved down by exactly 200')
+  assert.ok(arranged.every(s => s.group === placed[0].group), 'still one group')
+  assert.deepEqual(await json('novaSurface.doc.strokes.filter(s => s.author !== "ai").map(s => s.id)'), student, 'student strokes unchanged by arranging')
+  await clickSel('#undo'); await sleep(150)
+  assert.near(Math.min(...(await ai()).map(s => s.y0)) - Math.min(...placed.map(s => s.y0)), 0, 1, 'one undo put the arrangement back')
+
+  // a retried request (same id) and a redelivered one do nothing new
+  const count = await strokeCount()
+  await evaluate(`novaMock.enqueueOps(novaMock.first, 'request-browser-1', ${JSON.stringify(draw)})`)
+  await evaluate('novaSession.heartbeat()'); await evaluate('novaSession.heartbeat()'); await sleep(200)
+  assert.equal(await strokeCount(), count, 'no duplicate drawing')
+})
+
+await test('a render job for NOVA: the stored PDF is rendered by pdf.js, a page and a crop come out right, and the result is reported', async () => {
+  await evaluate(`window.__pdf = Uint8Array.from(atob('${syntheticPdf()}'), c => c.charCodeAt(0)); 0`)
+  const sourceId = await evaluate("novaSession.uploadSource(window.__pdf, 'Synthetic_Review.pdf', 2)")
+  assert.ok(/^src_[0-9a-f]{40}$/.test(sourceId), 'the original is kept as a source')
+  const params = { sourceId, notebookId: '', mode: 'page_per_item', layout: 'top_left', items: [{ page: 1 }, { page: 2, crop: { x: 0, y: 0.6, w: 0.5, h: 0.4 } }] }
+  const jobId = await evaluate(`novaMock.addJob(${JSON.stringify(params)})`)
+  await evaluate('novaPollJobs()')
+  const job = await json(`novaMock.jobs.find(j => j.jobId === ${JSON.stringify(jobId)})`)
+  assert.equal(job.status, 'done', 'the job was reported done' + (job.message ? ': ' + job.message : ''))
+  assert.equal(job.outputs.length, 2, 'two pictures')
+  const [pageOut, cropOut] = job.outputs
+  assert.near(pageOut.height, 1600, 2, 'the page is rendered at the usual size')
+  assert.near(pageOut.width / pageOut.height, 612 / 792, 0.01, 'with the page\'s shape')
+  assert.ok(await pixelOf(pageOut.imageId, Math.round(pageOut.width * 0.4), Math.round(pageOut.height * 0.18)) < 60, 'the rectangle on page 1 is black where it should be')
+  assert.ok(await pixelOf(pageOut.imageId, Math.round(pageOut.width * 0.2), Math.round(pageOut.height * 0.8)) > 240, 'and the rest is white')
+  assert.near(cropOut.width / cropOut.height, (0.5 * 612) / (0.4 * 792), 0.02, 'the crop has the shape of the rectangle that was asked for')
+  assert.ok(cropOut.width > 800, 'and is rendered large enough to read')
+  assert.ok(await pixelOf(cropOut.imageId, Math.round(cropOut.width * 0.49), Math.round(cropOut.height * 0.53)) < 60, 'page 2\'s rectangle is inside the crop')
+  assert.ok(await pixelOf(cropOut.imageId, Math.round(cropOut.width * 0.9), Math.round(cropOut.height * 0.1)) > 240, 'and the corner outside it is white')
+  assert.equal(await evaluate("novaSession.rpc('nb_jobs', {}).then(r => r.jobs.length)"), 0, 'nothing is left waiting')
+})
+
+await test('inserting a PDF also keeps the original and records each page\'s document and page number', async () => {
+  await evaluate(`window.__pdf = Uint8Array.from(atob('${syntheticPdf()}'), c => c.charCodeAt(0)); 0`)
+  await evaluate("novaInsertPicture(new File([window.__pdf], 'Exam_Review_Synthetic.pdf', { type: 'application/pdf' }))")
+  for (let i = 0; i < 40 && (await evaluate('novaSurface.doc.images.length')) < 2; i++) await sleep(150)
+  assert.equal(await evaluate('novaSurface.doc.images.length'), 2, 'two pages were placed')
+  assert.equal(await evaluate('novaMock.sources.size'), 1, 'the original PDF was stored once')
+  for (let i = 0; i < 40 && (await evaluate('novaMock.imageMeta.size')) < 2; i++) await sleep(150)
+  const meta = await json('[...novaMock.imageMeta.values()]')
+  assert.deepEqual(meta.map(m => [m.sourceName, m.page]), [['Exam_Review_Synthetic.pdf', 1], ['Exam_Review_Synthetic.pdf', 2]], 'each picture knows its document and page')
+  assert.ok(meta.every(m => /^src_[0-9a-f]{40}$/.test(m.sourceId)), 'by the stored document\'s id')
+})
+
 // ---- report ----
 
 const failed = results.filter(r => !r.ok)
