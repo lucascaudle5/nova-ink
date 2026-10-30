@@ -193,3 +193,31 @@ test('library: folders and cover colors; a notebook reopens on the page asked fo
   assert.ok(state.folders[0].deletedAt)
   done()
 })
+
+test('new page: chosen name, paper and position, then opened; a bad paper adds nothing', async () => {
+  const { server, session, editor, done } = await rig()
+  const first = server.first
+  assert.ok(await session.addPage({ title: 'Free body diagrams', paper: { color: 'cream', pattern: 'graph' }, afterPageId: null }))
+  const added = session.currentPage!
+  assert.deepEqual([added.title, editor.page, session.getState().busy], ['Free body diagrams', { color: 'cream', pattern: 'graph' }, false])
+  await session.openPage(first)
+  assert.ok(await session.addPage({ title: 'Between' }))
+  assert.deepEqual(session.getState().notebooks[0].pages.map(p => p.title), ['Page 1', 'Between', 'Free body diagrams'])
+  assert.equal(await session.addPage({ paper: { color: 'neon', pattern: 'graph' } as never }), false)
+  assert.equal(session.getState().notebooks[0].pages.length, 3)
+  done()
+})
+
+test('a cover color shows at once, before the server answers, and quick changes settle on the last one', async () => {
+  const { server, session, done } = await rig()
+  server.latencyMs = 30
+  const id = server.notebookId
+  const a = session.updateNotebook(id, { color: '#b8432f' })
+  assert.equal(session.getState().notebooks[0].color, '#b8432f')
+  const b = session.updateNotebook(id, { color: '#1f7a5c' })
+  assert.equal(session.getState().notebooks[0].color, '#1f7a5c')
+  await Promise.all([a, b])
+  assert.equal(session.getState().notebooks[0].color, '#1f7a5c')
+  assert.equal(server.notebooks[0].color, '#1f7a5c')
+  done()
+})

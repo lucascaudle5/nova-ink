@@ -2,6 +2,7 @@
  * In-memory stand-in for the nb_* tools, for tests and for previewing the app outside ChatGPT. It follows
  * PageDO's order of save checks (replay, editing control, revision). Holds test data only, never saved anywhere.
  */
+import { isPaper } from '../engine/src/core/paper'
 import type { Paper } from '../engine/src/core/paper'
 import type { Camera } from '../engine/src/core/types'
 import type { Data } from './session'
@@ -126,7 +127,8 @@ export class MockServer {
         if (!book) return missing()
         const live = [...this.pages].filter(([, p]) => p.notebookId === book.id && !p.deletedAt)
         const previous = a.afterPageId ? this.pages.get(a.afterPageId) : live.at(-1)?.[1]
-        const pageId = this.addPage(book.id, a.title ?? `Page ${live.length + 1}`, previous?.paper, a.afterPageId)
+        if (a.paper && !isPaper(a.paper)) return { ok: false, code: 'INVALID_REQUEST', message: 'Unknown paper style.' }
+        const pageId = this.addPage(book.id, a.title ?? `Page ${live.length + 1}`, a.paper ?? previous?.paper, a.afterPageId)
         return ok({ pageId, previousPageId: a.afterPageId ?? live.at(-1)?.[0] ?? null })
       }
     }

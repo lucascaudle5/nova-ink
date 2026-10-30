@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { z } from 'zod'
+import { isPaper } from '../../../engine/src/core/paper'
 import type { ServerContext } from '../app'
 import type { NotebookLibraryDO, PageMeta } from './library-do'
 import type { PageDO } from './page-do'
@@ -108,10 +109,12 @@ export function createEngineServer(ctx: ServerContext): McpServer {
   tool('nb_remove_notebook', 'Move a notebook to the trash (restorable)', z.object({ notebookId: uuid }), 'mcp:write', a => library().removeNotebook(a))
   tool('nb_restore_notebook', 'Restore a notebook from the trash', z.object({ notebookId: uuid }), 'mcp:write', a => library().restoreNotebook(a))
 
-  tool('nb_add_page', 'Add a page; it starts with the paper of the page it follows', z.object({ notebookId: uuid, afterPageId: uuid.nullable().optional(), title: z.string().max(80).optional() }), 'mcp:write', async a => {
-    const added = await library().addPage(a)
+  tool('nb_add_page', 'Add a page; it starts with the given paper, else the paper of the page it follows', z.object({ notebookId: uuid, afterPageId: uuid.nullable().optional(), title: z.string().max(80).optional(), paper: paper.optional() }), 'mcp:write', async a => {
+    if (a.paper && !isPaper(a.paper)) return { ok: false, code: 'INVALID_REQUEST', message: 'Unknown paper style.' }
+    const added = await library().addPage({ notebookId: a.notebookId, afterPageId: a.afterPageId, title: a.title })
     if (!added.ok) return added
-    if (added.previousPageId) {
+    if (a.paper) await page(added.pageId).init({ paper: a.paper })
+    else if (added.previousPageId) {
       const info = await page(added.previousPageId).info()
       if (info.ok) await page(added.pageId).init({ paper: info.paper })
     }

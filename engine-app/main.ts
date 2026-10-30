@@ -1,5 +1,7 @@
 import { App, PostMessageTransport } from '@modelcontextprotocol/ext-apps'
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps'
+import { PAPER_COLORS, PAPER_PATTERNS } from '../engine/src/core/paper'
+import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
 import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MockServer } from './mock-server'
@@ -247,9 +249,9 @@ function renderPages(state: SessionState) {
   }
 
   const footer = el('footer')
-  const add = el('button', { className: 'text primary', disabled: !current })
-  add.append(icon(ICON_PLUS), document.createTextNode(' Page'))
-  add.addEventListener('click', () => void session.addPage())
+  const add = el('button', { className: 'text primary new-page', disabled: !current || state.busy })
+  add.append(icon(ICON_PLUS), el('span', { textContent: 'New page' }))
+  add.addEventListener('click', pageSheet)
   footer.append(add)
   footer.append(action(showTrash ? 'Hide trash' : 'Trashed pages', () => { showTrash = !showTrash; render() }))
   for (const b of footer.querySelectorAll('button')) b.classList.add('text')
@@ -278,7 +280,7 @@ $('next-page').addEventListener('click', () => step(1))
 // ---- Library: notebook covers and folders ----
 
 const library = $<HTMLElement>('library')
-const sheet = $<HTMLDivElement>('library-sheet')
+const sheet = $<HTMLDivElement>('sheet')
 const COVERS = ['#2f5d8a', '#1f7a5c', '#b8432f', '#d08a1e', '#6b4fa3', '#2b8a9e', '#c2477a', '#5f6b7a']
 const DEFAULT_COVER = COVERS[0]
 const LAST_PAGES_KEY = 'nova-ink-engine:last-pages'
@@ -448,14 +450,64 @@ function notebookSheet(n: NotebookInfo | null) {
     const folderId = move.value || null
     closeSheet()
     if (!n) { if (await session.createNotebook(name, { folderId, color })) showLibrary(false); return }
-    if (name !== n.name) await session.renameNotebook(n.id, name)
-    if (folderId !== (n.folderId ?? null) || color !== (n.color ?? DEFAULT_COVER)) await session.updateNotebook(n.id, { folderId, color })
+    const changes: Array<Promise<unknown>> = []
+    if (name !== n.name) changes.push(session.renameNotebook(n.id, name))
+    if (folderId !== (n.folderId ?? null)) changes.push(session.updateNotebook(n.id, { folderId }))
+    await Promise.all(changes)
   }
   const input = nameField(n?.name ?? `Notebook ${state.notebooks.filter(b => !b.deletedAt).length + 1}`, 'Notebook name', () => void submit())
-  const body = [label('Name'), input, label('Cover'), swatches(color, c => { color = c }), label('Folder'), move]
-  const buttons = [action('Cancel', closeSheet, 'text'), action(n ? 'Save' : 'Create', () => void submit(), 'text primary')]
+  // An existing notebook's cover changes on the tap, without waiting for Save or the server.
+  const pick = (c: string) => { color = c; if (n) void session.updateNotebook(n.id, { color: c }) }
+  const body = [label('Name'), input, label('Cover'), swatches(color, pick), label('Folder'), move]
+  const buttons = [action(n ? 'Close' : 'Cancel', closeSheet, 'text'), action(n ? 'Save' : 'Create', () => void submit(), 'text primary')]
   if (n) buttons.unshift(confirmButton('Move to trash', 'Tap again to trash it', () => { closeSheet(); void trashNotebook(n.id) }, 'text danger'))
   openSheet(n ? 'Notebook' : 'New notebook', body, buttons)
+}
+
+/** New page: name, paper (starts as the open page's) and where it goes. */
+function pageSheet() {
+  const state = session.getState()
+  const live = livePages(state)
+  const index = live.findIndex(p => p.id === state.pageId)
+  let paper: Paper = { ...surface.paper }
+  const label = (text: string) => el('div', { className: 'sheet-label', textContent: text })
+
+  const papers = el('div', { className: 'papers', role: 'radiogroup', ariaLabel: 'Paper' })
+  const colors = el('div', { className: 'paper-colors', role: 'radiogroup', ariaLabel: 'Paper color' })
+  const paint = () => {
+    papers.replaceChildren(...(Object.keys(PAPER_PATTERNS) as PaperPattern[]).map(pattern => {
+      const selected = pattern === paper.pattern
+      const b = el('button', { className: `paper paper-${pattern}${selected ? ' selected' : ''}${PAPER_COLORS[paper.color].dark ? ' dark' : ''}`, role: 'radio', ariaChecked: String(selected), ariaLabel: PAPER_PATTERNS[pattern].label }, { backgroundColor: PAPER_COLORS[paper.color].fill })
+      b.style.setProperty('--rule', PAPER_COLORS[paper.color].major)
+      b.append(el('span', { textContent: PAPER_PATTERNS[pattern].label }))
+      b.addEventListener('click', () => { paper = { ...paper, pattern }; paint() })
+      return b
+    }))
+    colors.replaceChildren(...(Object.keys(PAPER_COLORS) as PaperColor[]).map(color => {
+      const selected = color === paper.color
+      const b = el('button', { className: `paper-color${selected ? ' selected' : ''}`, role: 'radio', ariaChecked: String(selected), title: PAPER_COLORS[color].label, ariaLabel: `${PAPER_COLORS[color].label} paper` }, { background: PAPER_COLORS[color].fill })
+      b.addEventListener('click', () => { paper = { ...paper, color }; paint() })
+      return b
+    }))
+  }
+  paint()
+
+  const where = el('select', { className: 'sheet-select', ariaLabel: 'Position' })
+  if (index >= 0 && index < live.length - 1) where.append(el('option', { value: 'after', textContent: `After “${live[index].title}”` }))
+  where.append(el('option', { value: 'end', textContent: 'At the end of the notebook' }))
+
+  const submit = async () => {
+    const title = input.value.trim()
+    if (!title) { input.focus(); return }
+    create.disabled = true
+    const afterPageId = where.value === 'after' ? live[index].id : live.at(-1)?.id ?? null
+    if (await session.addPage({ title, paper, afterPageId })) { closeSheet(); closePanels() }
+    else create.disabled = false
+  }
+  const input = nameField(`Page ${live.length + 1}`, 'Page name', () => void submit())
+  const create = action('Add page', () => void submit(), 'text primary')
+  const body = [label('Name'), input, label('Paper'), papers, colors, ...(where.options.length > 1 ? [label('Position'), where] : [])]
+  openSheet('New page', body, [action('Cancel', closeSheet, 'text'), create])
 }
 
 async function trashNotebook(notebookId: string) {

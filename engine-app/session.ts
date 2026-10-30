@@ -454,31 +454,51 @@ export class NotebookSession {
 
   // ---- notebook organisation ----
 
+  private organising = 0
+  /** Reloads the list once the last of several quick changes is answered, so a shown change never flickers back. */
   private async organise(name: string, args: Record<string, unknown>): Promise<Data> {
+    this.organising++
     const res = await this.call(name, args)
+    this.organising--
     if (!res.ok) this.set({ message: res.message ?? 'That did not work.' })
-    await this.refreshList()
+    if (!this.organising) await this.refreshList()
     return res
   }
 
-  async addPage(): Promise<void> {
+  /** Adds a page after `afterPageId` (default: the open page; null: at the end) and opens it. */
+  async addPage(options: { title?: string; paper?: Paper; afterPageId?: string | null } = {}): Promise<boolean> {
     const notebookId = this.state.notebookId
-    if (!notebookId) return
-    const res = await this.organise('nb_add_page', { notebookId, afterPageId: this.state.pageId })
-    if (res.ok) await this.openPage(res.pageId)
+    if (!notebookId || this.state.busy) return false
+    const afterPageId = options.afterPageId === undefined ? this.state.pageId : options.afterPageId
+    this.set({ busy: true, message: 'Adding a page…' })
+    const res = await this.call('nb_add_page', { notebookId, afterPageId, ...(options.title ? { title: options.title } : {}), ...(options.paper ? { paper: options.paper } : {}) })
+    this.set({ busy: false })
+    if (!res.ok) { this.set({ message: `The page was not added: ${res.message ?? 'the server refused it'}.` }); return false }
+    await this.refreshList()
+    return this.openPage(res.pageId)
   }
   async createNotebook(name: string, cover: { folderId?: string | null; color?: string | null } = {}): Promise<boolean> {
     const res = await this.organise('nb_create_notebook', { name, ...cover })
     return res.ok && await this.openPage(res.pageId)
   }
-  /** Moves a notebook into a folder (null = top level) and/or sets its cover color; omitted fields stay. */
-  updateNotebook(notebookId: string, change: { folderId?: string | null; color?: string | null }) { return this.organise('nb_update_notebook', { notebookId, ...change }) }
+  /** Moves a notebook into a folder (null = top level) and/or sets its cover color; omitted fields stay. Shown at once. */
+  updateNotebook(notebookId: string, change: { folderId?: string | null; color?: string | null }) {
+    this.patchNotebook(notebookId, change)
+    return this.organise('nb_update_notebook', { notebookId, ...change })
+  }
   createFolder(name: string) { return this.organise('nb_create_folder', { name }) }
-  renameFolder(folderId: string, name: string) { return this.organise('nb_rename_folder', { folderId, name }) }
+  renameFolder(folderId: string, name: string) {
+    this.set({ folders: this.state.folders.map(f => f.id === folderId ? { ...f, name } : f) })
+    return this.organise('nb_rename_folder', { folderId, name })
+  }
+  /** Local preview of a change the server is asked for; the list that `organise` reloads afterwards is what counts. */
+  private patchNotebook(notebookId: string, change: Partial<NotebookInfo>) {
+    this.set({ notebooks: this.state.notebooks.map(n => n.id === notebookId ? { ...n, ...change } : n) })
+  }
   removeFolder(folderId: string) { return this.organise('nb_remove_folder', { folderId }) }
   restoreFolder(folderId: string) { return this.organise('nb_restore_folder', { folderId }) }
   renamePage(pageId: string, title: string) { return this.organise('nb_rename_page', { pageId, title }) }
-  renameNotebook(notebookId: string, name: string) { return this.organise('nb_rename_notebook', { notebookId, name }) }
+  renameNotebook(notebookId: string, name: string) { this.patchNotebook(notebookId, { name }); return this.organise('nb_rename_notebook', { notebookId, name }) }
   movePage(pageId: string, afterPageId: string | null) { return this.organise('nb_move_page', { pageId, afterPageId }) }
   async removePage(pageId: string): Promise<void> {
     const book = this.state.notebooks.find(n => n.pages.some(p => p.id === pageId))

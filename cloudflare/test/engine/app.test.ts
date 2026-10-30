@@ -68,6 +68,11 @@ describe('engine tools', () => {
     expect(added).toMatchObject({ ok: true, previousPageId: pageId })
     const fresh = await tool(token, 'nb_open_page', { pageId: added.pageId, clientId: client })
     expect(fresh).toMatchObject({ ok: true, revision: 0, paper: { color: 'dark', pattern: 'graph' } })
+    const chosen = await tool(token, 'nb_add_page', { notebookId: book, title: 'Notes', paper: { color: 'cream', pattern: 'lined' } })
+    expect(await tool(token, 'nb_open_page', { pageId: chosen.pageId, clientId: client })).toMatchObject({ ok: true, paper: { color: 'cream', pattern: 'lined' }, page: { title: 'Notes' } })
+    const pagesBefore = (await tool(token, 'nb_list')).notebooks[0].pages.length
+    expect(await tool(token, 'nb_add_page', { notebookId: book, paper: { color: 'neon', pattern: 'lined' } })).toMatchObject({ ok: false, code: 'INVALID_REQUEST' })
+    expect((await tool(token, 'nb_list')).notebooks[0].pages.length).toBe(pagesBefore)
 
     expect(await tool(token, 'nb_remove_page', { pageId: added.pageId })).toMatchObject({ ok: true })
     expect(await tool(token, 'nb_open_page', { pageId: added.pageId, clientId: client })).toMatchObject({ ok: false, code: 'IN_TRASH' })
