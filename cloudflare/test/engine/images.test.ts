@@ -77,5 +77,21 @@ describe('pictures', () => {
     expect(bad).toMatchObject({ ok: false, code: 'INVALID_STROKE' })
     const other = await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'b2', baseRevision: 0, adds: [{ key: keyBetween(null, null), stroke: { id: 'v1', kind: 'video' } }] })
     expect(other).toMatchObject({ ok: false, code: 'INVALID_STROKE' })
+    const tilted = await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'b3', baseRevision: 0, adds: [{ key: keyBetween(null, null), stroke: { ...imageRow('p3', 'pic-2'), rotation: 45 } }] })
+    expect(tilted).toMatchObject({ ok: false, code: 'INVALID_STROKE' })
+  })
+
+  it('a rotated picture keeps its rotation through a save and reopen', async () => {
+    const token = (await signIn())!
+    const bytes = fakeJpeg(1000)
+    expect(await tool(token, 'nb_put_image', { imageId: 'pic-3', mime: 'image/jpeg', width: 10, height: 10, bytes: 1000, count: 1, index: 0, data: b64(bytes) })).toMatchObject({ ok: true, complete: true })
+    const created = await tool(token, 'nb_create_notebook', { name: 'Rotated' })
+    const client = crypto.randomUUID()
+    await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
+    const key = keyBetween(null, null)
+    const row = { ...imageRow('r1', 'pic-3'), rotation: 270 }
+    expect(await tool(token, 'nb_save_page', { pageId: created.pageId, clientId: client, saveId: 'r1', baseRevision: 0, adds: [{ key, stroke: row }] })).toMatchObject({ ok: true, revision: 1 })
+    const reopened = await tool(token, 'nb_open_page', { pageId: created.pageId, clientId: client })
+    expect(JSON.parse(reopened.rows)).toEqual([{ key, stroke: row }])
   })
 })

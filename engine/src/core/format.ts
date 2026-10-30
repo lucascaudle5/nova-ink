@@ -3,8 +3,8 @@ import { DEFAULT_PAPER, isPaper } from './paper'
 import type { Paper } from './paper'
 import { createImage, IMAGE_ID } from './image'
 import { createStroke, MAX_POINTS_PER_STROKE } from './stroke'
-import { isImage, POINT_STRIDE } from './types'
-import type { Author, ImageItem, PageItem, Stroke } from './types'
+import { isImage, POINT_STRIDE, ROTATIONS } from './types'
+import type { Author, ImageItem, PageItem, Rotation, Stroke } from './types'
 
 /**
  * NOVA ink page format, version 1 (experimental: not used by any saved notebook yet).
@@ -138,8 +138,9 @@ export function parseStroke(data: unknown, where = 'Stroke'): { ok: true; stroke
 export const STROKE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
- * An image placement as stored per row: { id, kind: "image", author, createdAt, image, x, y, w, h }.
+ * An image placement as stored per row: { id, kind: "image", author, createdAt, image, x, y, w, h, rotation? }.
  * Positions are kept to 0.01 page units. `image` names a picture stored separately by the host.
+ * `rotation` is written only when it is not 0, so unrotated rows read the same in older versions.
  */
 export interface SerializedImage {
   id: string
@@ -151,6 +152,7 @@ export interface SerializedImage {
   y: number
   w: number
   h: number
+  rotation?: Rotation
 }
 export type SerializedItem = SerializedStroke | SerializedImage
 
@@ -160,7 +162,11 @@ const encodedImages = new WeakMap<ImageItem, SerializedImage>()
 export function serializeImage(i: ImageItem): SerializedImage {
   let out = encodedImages.get(i)
   if (!out) {
-    out = Object.freeze({ id: i.id, kind: 'image' as const, author: i.author, createdAt: i.createdAt, image: i.image, x: round2(i.x), y: round2(i.y), w: round2(i.w), h: round2(i.h) })
+    out = Object.freeze({
+      id: i.id, kind: 'image' as const, author: i.author, createdAt: i.createdAt, image: i.image,
+      x: round2(i.x), y: round2(i.y), w: round2(i.w), h: round2(i.h),
+      ...(i.rotation ? { rotation: i.rotation } : {}),
+    })
     encodedImages.set(i, out)
   }
   return out
@@ -178,8 +184,9 @@ export function parseImage(data: unknown, where = 'Image'): { ok: true; image: I
   if (!AUTHORS.includes(s.author as Author)) return bad('has an unknown author.')
   if (typeof s.createdAt !== 'number' || !Number.isFinite(s.createdAt)) return bad('has an invalid time.')
   if (typeof s.image !== 'string' || !IMAGE_ID.test(s.image)) return bad('has an invalid picture reference.')
+  if (s.rotation !== undefined && !ROTATIONS.includes(s.rotation)) return bad('has an invalid rotation.')
   try {
-    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x: s.x as number, y: s.y as number, w: s.w as number, h: s.h as number }) }
+    return { ok: true, image: createImage({ id: s.id, author: s.author as Author, createdAt: s.createdAt, image: s.image, x: s.x as number, y: s.y as number, w: s.w as number, h: s.h as number, rotation: s.rotation }) }
   } catch (error) {
     return bad(`has an invalid position or size (${error instanceof Error ? error.message : String(error)}).`)
   }

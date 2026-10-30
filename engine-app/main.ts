@@ -229,6 +229,7 @@ async function insertPicture(file: File) {
 const imageFile = $<HTMLInputElement>('image-file')
 $('insert-image').addEventListener('click', () => { tools.closePopover(); imageFile.value = ''; imageFile.click() })
 imageFile.addEventListener('change', () => { const file = imageFile.files?.[0]; if (file) void insertPicture(file) })
+$('image-rotate').addEventListener('click', () => surface.rotateSelectedImage())
 $('image-delete').addEventListener('click', () => surface.deleteSelectedImage())
 $('image-done').addEventListener('click', () => surface.setTool('pen'))
 

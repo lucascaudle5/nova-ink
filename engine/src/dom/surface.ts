@@ -3,7 +3,7 @@ import { InkDocument } from '../core/document'
 import type { DocumentChange } from '../core/document'
 import { eraseFromStroke, strokesHitBy } from '../core/eraser'
 import { History } from '../core/history'
-import { createImage, dragRect, fitSize, imageAt, placeImage } from '../core/image'
+import { createImage, dragRect, fitSize, imageAt, placeImage, rotateImage } from '../core/image'
 import type { Rect } from '../core/image'
 import { InputController } from '../core/input'
 import type { PointerInput, PointerKind, Tool } from '../core/input'
@@ -222,6 +222,19 @@ export class InkSurface {
     this.animateCamera(fitBounds({ minX: first.x, minY: first.y, maxX: first.x + first.w, maxY: first.y + first.h }, this.widthCss, this.heightCss))
     this.notify()
     return items
+  }
+
+  /** Turns the selected picture a quarter clockwise about its centre, as one undoable step; it stays selected. */
+  rotateSelectedImage(): boolean {
+    const current = this.selectedImage
+    if (!current || this.readOnly) return false
+    const next = rotateImage(current)
+    if (!this.history.replaceImage(current.id, next)) return false
+    this.selected = next.id
+    this.invalidateScene()
+    this.needsLive = true
+    this.notify()
+    return true
   }
 
   deleteSelectedImage(): boolean {

@@ -44,14 +44,19 @@ export interface ImageItem {
   readonly id: string
   readonly author: Author
   readonly image: string
-  /** Top-left corner and size in page units. */
+  /** Top-left corner and size in page units of the area it covers on the page, after rotation. */
   readonly x: number
   readonly y: number
   readonly w: number
   readonly h: number
+  /** Clockwise quarter turns of the picture inside that area. At 90 and 270 the picture's own width runs along `h`. */
+  readonly rotation: Rotation
   readonly bounds: Bounds
   readonly createdAt: number
 }
+
+export type Rotation = 0 | 90 | 180 | 270
+export const ROTATIONS: readonly Rotation[] = [0, 90, 180, 270]
 
 /** Anything a page holds, as stored per row. Strokes have no `kind`. */
 export type PageItem = Stroke | ImageItem

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { InkDocument } from '../src/core/document'
 import { parseItem, serializeItem } from '../src/core/format'
 import { History } from '../src/core/history'
-import { createImage, dragRect, fitSize, imageAt, placeImage } from '../src/core/image'
+import { createImage, dragRect, fitSize, imageAt, placeImage, rotateImage } from '../src/core/image'
 import { InputController } from '../src/core/input'
 import type { InputHandlers } from '../src/core/input'
 import { createStroke } from '../src/core/stroke'
@@ -73,6 +73,29 @@ test('the pages of an imported PDF go in and come out as one undo step', () => {
   history.insertImages([])
   history.undo(); history.undo()
   assert.equal(doc.images.length, 0)
+})
+
+test('rotating turns a quarter about the centre, swaps the area, round-trips, and undoes as one step', () => {
+  const doc = new InkDocument(), history = new History(doc)
+  history.insertImage(photo('a', 0, 0, 400, 300))
+  const once = rotateImage(doc.getImage('a')!)
+  assert.deepEqual([once.x, once.y, once.w, once.h, once.rotation], [50, -50, 300, 400, 90])
+  history.replaceImage('a', once)
+  let item = once
+  for (const expected of [180, 270, 0]) { item = rotateImage(item); assert.equal(item.rotation, expected) }
+  assert.deepEqual([item.x, item.y, item.w, item.h], [0, 0, 400, 300])
+  assert.equal(placeImage(once, { x: 1, y: 2, w: 30, h: 40 }).rotation, 90, 'moving or resizing keeps the rotation')
+
+  const row = JSON.parse(JSON.stringify(serializeItem(once)))
+  assert.equal(row.rotation, 90)
+  const back = parseItem(row)
+  assert.ok(back.ok && isImage(back.item) && back.item.rotation === 90)
+  assert.equal('rotation' in JSON.parse(JSON.stringify(serializeItem(photo('b')))), false, 'unrotated rows are unchanged')
+  assert.equal(parseItem({ ...row, rotation: 45 }).ok, false)
+  assert.equal(parseItem({ ...row, rotation: '90' }).ok, false)
+
+  history.undo()
+  assert.deepEqual(doc.images.map(i => [i.id, i.rotation]), [['a', 0]])
 })
 
 test('dragging: move offsets; resize keeps the aspect ratio and a minimum size', () => {

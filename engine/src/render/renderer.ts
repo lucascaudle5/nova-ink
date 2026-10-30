@@ -139,6 +139,17 @@ export class CanvasRenderer {
 
   private drawImageItem(ctx: Context2D, image: ImageItem, camera: Camera) {
     const source = this.options.imageSource?.(image.image)
+    if (source && image.rotation) {
+      // Draw the unrotated picture centred on the origin, under camera x rotation about the area's centre.
+      const s = camera.z * this.dpr, a = (image.rotation * Math.PI) / 180
+      const cos = Math.round(Math.cos(a)), sin = Math.round(Math.sin(a))
+      const sideways = image.rotation % 180 !== 0
+      const pw = sideways ? image.h : image.w, ph = sideways ? image.w : image.h
+      ctx.setTransform(s * cos, s * sin, -s * sin, s * cos, (image.x + image.w / 2 - camera.x) * s, (image.y + image.h / 2 - camera.y) * s)
+      ctx.drawImage(source as never, -pw / 2, -ph / 2, pw, ph)
+      this.applyCamera(ctx, camera)
+      return
+    }
     if (source) { ctx.drawImage(source as never, image.x, image.y, image.w, image.h); return }
     // Not loaded (yet): a quiet placeholder of the right size, so the layout never jumps.
     const dark = PAPER_COLORS[this.paperStyle.color].dark

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { CanvasRenderer } from '../src/render/renderer'
 import type { CanvasLike, Context2D } from '../src/render/renderer'
 import { generateStrokes } from '../src/dev/generate'
+import { createImage, rotateImage } from '../src/core/image'
 
 class FakeContext implements Context2D {
   calls: string[] = []
@@ -103,6 +104,18 @@ test('paper: fills the page color and draws pattern lines; blank draws only the 
   renderer.paper = { color: 'white', pattern: 'graph' }
   renderer.drawPaper({ x: 0, y: 0, z: 1 })
   assert.ok(paper.ctx.rects > 50)
+})
+
+test('a rotated picture is drawn turned about the centre of its area, then the camera is restored', () => {
+  const base = fakeCanvas()
+  const c = fakeCanvas()
+  const renderer = new CanvasRenderer({ paper: c, base, live: c, snapshot: c }, { createPath: () => ({}), imageSource: () => ({}) as never })
+  renderer.resize(800, 600, 1)
+  const turned = rotateImage(createImage({ image: 'pic1', x: 0, y: 0, w: 400, h: 300 }))
+  renderer.drawScene([], { x: 0, y: 0, z: 2 }, undefined, [turned])
+  // Area is 300 x 400 centred on (200, 150); the picture itself stays 400 x 300, turned a quarter.
+  assert.deepEqual(base.ctx.images, [{ dx: -200, dy: -150, dw: 400, dh: 300 }])
+  assert.deepEqual(base.ctx.transform, [2, 0, 0, 2, -0, -0])
 })
 
 test('on dark paper near-black ink is shown light; colored ink is unchanged', () => {
