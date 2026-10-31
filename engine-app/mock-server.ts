@@ -31,6 +31,10 @@ export class MockServer {
   images = new Map<string, { mime: string; width: number; height: number; bytes: number; count: number; pieces: Map<number, string> }>()
   notebooks: MockNotebook[] = []
   pages = new Map<string, MockPage>()
+  /** The picture each page's notebook last stored for Claude, as nova_read_page would attach it. */
+  views = new Map<string, { seen: string; mime: string; data: string; width: number; height: number; at: string }>()
+  /** Test seam: refuse every nb_put_view. */
+  failViews = false
   last: { notebookId: string; pageId: string } | null = null
   now = 0
   offline = false
@@ -219,6 +223,12 @@ export class MockServer {
           if (!o || (o.status !== 'queued' && o.status !== 'applied')) continue
           if (r.status === 'failed') { o.status = 'failed'; o.message = r.message } else { o.status = 'saved'; o.revision = p.revision }
         }
+        return ok()
+      }
+      case 'nb_put_view': {
+        if (p.lease && p.lease.clientId !== a.clientId && p.lease.until > this.now) return { ok: false, code: 'LEASE_HELD', message: 'Another device is editing this page.' }
+        if (this.failViews) return { ok: false, code: 'SERVER_ERROR', message: 'The preview server refused the picture.' }
+        if (a.view) this.views.set(a.pageId, { ...a.view, at: new Date().toISOString() }); else this.views.delete(a.pageId)
         return ok()
       }
       case 'nb_release': if (p.lease?.clientId === a.clientId) p.lease = null; return ok()

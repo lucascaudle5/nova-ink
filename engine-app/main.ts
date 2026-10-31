@@ -6,7 +6,7 @@ import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MAX_WIDTH, MIN_WIDTH, PALETTE } from '../engine/harness/presets'
 import { MockServer } from './mock-server'
-import { acceptsPictures, blobToBase64, MAX_PICTURE_BASE64, notebookContext } from './context'
+import { blobToBase64, MAX_VIEW_BASE64, notebookContext, SHOWN } from './context'
 import type { NotebookView, Seen } from './context'
 import type { Bounds } from '../engine/src/core/types'
 import { JobRunner } from './jobs'
@@ -194,7 +194,8 @@ if (preview) {
 /** The angle shown while a picture is being turned by its handle, or null. */
 let turning: number | null = null
 
-const session = new NotebookSession({ api, clientId: persistentClientId(), editor })
+const clientId = persistentClientId()
+const session = new NotebookSession({ api, clientId, editor })
 surface.onChange(() => { session.changed(); renderSelectionBar(); renderSnipBar() })
 
 // ---- Pictures ----
@@ -944,17 +945,24 @@ document.addEventListener('pointerdown', e => {
 })
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else { openMenu(false); closePanels() } } })
 
-// ---- What Claude sees: where the student is and a picture of the work, kept in Claude's context ----
+// ---- What Claude sees: a picture of the work stored with the page (nova_read_page returns it as an image), and a
+// note in Claude's context saying where the student is and that the picture is there ----
 
 /** The student can pause the picture from the More menu; it starts on. */
 let sharing = true
-/** The last update Claude has, as the text it was built from; empty when it must be sent again. */
-let sharedKey = ''
+/** The note Claude's context last took; empty when it must be sent again. */
+let sentNote = ''
+/** What the server holds for this notebook: `${pageId}:${seen}`, `${pageId}:none`, or '' when unknown. */
+let stored = ''
+/** Base64 length of the picture the server holds, for the preview log. */
+let storedLength: number | null = null
 let pictureStale = true
+/** How the last attempt to store the picture went: what it showed, or that it failed. */
+let shown: { pageId: string; seen: Seen; failed: boolean } | null = null
 let shareTimer: ReturnType<typeof setTimeout> | null = null
 let sharingNow = false
-/** In the desktop preview nothing leaves the page; each update is kept here so it can be inspected. */
-const contextLog: Array<{ text: string; image: number | null }> = []
+/** In the desktop preview each note to Claude is kept here, with the size of the stored picture, to be inspected. */
+const contextLog: Array<{ text: string; stored: number | null }> = []
 if (preview) Object.assign(window, { novaContextLog: contextLog })
 
 function currentView(): NotebookView {
@@ -978,17 +986,37 @@ function pinHere() {
 
 /** What Claude is shown now: the snipped area if there is one on this page, else the screen; or why nothing. */
 function seenNow(view: NotebookView): Seen {
+  if (!session.getState().editable) return 'elsewhere'
   if (!sharing) return 'paused'
-  if (app && !acceptsPictures(app.getHostCapabilities()?.updateModelContext)) return 'unsupported'
   const pin = pinHere()
   if (pin) return pin.whole ? 'page' : 'area'
   return view.onScreen.strokes + view.onScreen.pictures ? 'screen' : 'empty'
 }
 
-async function picture(seen: Seen): Promise<string | null> {
+type View = { mime: 'image/png' | 'image/jpeg'; data: string; width: number; height: number }
+
+/** The picture for `seen`, as a PNG, or a JPEG when the PNG is too large to store; null if even that is. */
+async function picture(seen: Seen): Promise<View | null> {
   const pin = pinHere()
   const blob = seen === 'screen' ? await surface.exportView() : pin ? await surface.exportArea(pin.area, 1600) : null
-  return blob ? blobToBase64(blob) : null
+  if (!blob) return null
+  const bitmap = await createImageBitmap(blob)
+  const { width, height } = bitmap
+  try {
+    const png = await blobToBase64(blob)
+    if (png.length <= MAX_VIEW_BASE64) return { mime: 'image/png', data: png, width, height }
+    const canvas = document.createElement('canvas')
+    canvas.width = width; canvas.height = height
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+    const jpeg = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+    const data = jpeg ? await blobToBase64(jpeg) : ''
+    return data && data.length <= MAX_VIEW_BASE64 ? { mime: 'image/jpeg', data, width, height } : null
+  } finally { bitmap.close() }
+}
+
+async function putView(pageId: string, view: (View & { seen: Seen }) | null) {
+  const done = await api('nb_put_view', { pageId, clientId, view })
+  if (!done.ok) throw new Error(String(done.message ?? done.code))
 }
 
 function pictureChanged() {
@@ -997,7 +1025,7 @@ function pictureChanged() {
   renderSharing()
 }
 
-/** Keeps Claude's view current, at most every 2 s and only when something changed. Never sends a message. */
+/** Keeps the picture and Claude's note current, at most every 2 s and only when something changed. Never sends a message. */
 function shareContext() {
   if (shareTimer) return
   shareTimer = setTimeout(() => { shareTimer = null; void flushContext() }, 2000)
@@ -1005,41 +1033,59 @@ function shareContext() {
 
 async function flushContext() {
   if (sharingNow || session.getState().status === 'loading') return
-  if (app && !app.getHostCapabilities()?.updateModelContext) return
   const view = currentView()
   let seen: Seen = view.page ? seenNow(view) : 'empty'
-  const key = notebookContext(view, seen)
-  const withPicture = !!view.page && (seen === 'screen' || seen === 'area' || seen === 'page')
-  if (key === sharedKey && !(withPicture && pictureStale)) return
   sharingNow = true
-  pictureStale = false
   try {
-    let image = withPicture ? await picture(seen) : null
-    if (image && image.length > MAX_PICTURE_BASE64) { image = null; seen = 'too-large' }
+    // Only the editing notebook stores a picture; another device's notebook shows Claude its own screen.
+    if (view.page && seen !== 'elsewhere') {
+      const pageId = view.page.id
+      try {
+        if (SHOWN.has(seen) && (pictureStale || stored !== `${pageId}:${seen}`)) {
+          pictureStale = false
+          const shot = await picture(seen)
+          if (shot) { await putView(pageId, { seen, ...shot }); stored = `${pageId}:${seen}`; storedLength = shot.data.length }
+          else seen = 'too-large'
+        }
+        if (!SHOWN.has(seen) && stored !== `${pageId}:none`) { await putView(pageId, null); stored = `${pageId}:none`; storedLength = null }
+        shown = { pageId, seen, failed: false }
+      } catch {
+        stored = ''
+        pictureStale = true
+        shown = { pageId, seen, failed: true }
+      }
+    }
     const text = notebookContext(view, seen)
-    const content = [{ type: 'text' as const, text }, ...(image ? [{ type: 'image' as const, data: image, mimeType: 'image/png' }] : [])]
-    if (app) await app.updateModelContext({ content })
-    else contextLog.push({ text, image: image?.length ?? null })
-    sharedKey = key
+    if (text !== sentNote) {
+      if (!app) contextLog.push({ text, stored: storedLength })
+      else if (app.getHostCapabilities()?.updateModelContext) await app.updateModelContext({ content: [{ type: 'text', text }] })
+      sentNote = text
+    }
   } catch {
-    sharedKey = ''
+    sentNote = ''
   } finally {
     sharingNow = false
+    renderSharing()
     if (pictureStale) shareContext()
   }
 }
 
-/** The line in the status pill that says what Claude sees, with a way back to the screen after a snip. */
+/** The line in the status pill that says what Claude can see, with a way back to the screen after a snip. */
 function renderSharing() {
   const box = $('sharing')
   const view = currentView()
   if (!view.page) { box.replaceChildren(); return }
   const seen = seenNow(view)
   const text: Record<Seen, string> = {
-    screen: 'Claude sees this screen', empty: 'Claude sees this screen', area: 'Claude sees your snip', page: 'Claude sees the whole page',
-    paused: 'Not showing Claude', unsupported: 'Claude sees the page name only', 'too-large': 'Claude sees this screen',
+    screen: 'Claude can see this screen', empty: 'Nothing on screen to show Claude', area: 'Claude can see your snip', page: 'Claude can see the whole page',
+    paused: 'Not showing Claude', 'too-large': 'Too large to show Claude; zoom in or snip', elsewhere: 'Shown to Claude from your other device',
   }
-  const items: Node[] = [document.createTextNode(text[seen])]
+  // Until the server has stored a picture of this kind for this page, say so rather than claim Claude can see it.
+  const mine = shown?.pageId === view.page.id ? shown : null
+  const label = mine?.failed ? 'Could not show Claude; retrying'
+    : mine?.seen === 'too-large' && seen === 'screen' ? text['too-large']
+    : SHOWN.has(seen) && mine?.seen !== seen ? 'Showing Claude…' : text[seen]
+  const items: Node[] = [document.createTextNode(label)]
   if (pinHere() && sharing) items.push(action('Show the screen', () => { pinned = null; pictureChanged() }, 'text'))
   box.replaceChildren(...items)
 }

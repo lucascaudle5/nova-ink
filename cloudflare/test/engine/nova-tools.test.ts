@@ -30,6 +30,41 @@ async function pageWithInk(token: string) {
   return { ...book, client }
 }
 
+describe('the picture the student shows Claude', () => {
+  it('the editing notebook stores it, nova_read_page returns it as image content (not in the JSON), and pausing removes it', async () => {
+    const token = (await signIn())!
+    const { pageId, client } = await pageWithInk(token)
+    const data = b64(fakePng())
+    const call = async () => (await rpc(token, 'tools/call', { name: 'nova_read_page', arguments: { pageId } })).body.result
+
+    let result = await call()
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].text).toMatch(/No image: the notebook is closed, paused, or showing an empty screen\./)
+    expect(result.structuredContent.view).toBeNull()
+
+    expect(await tool(token, 'nb_put_view', { pageId, clientId: client, view: { seen: 'screen', mime: 'image/png', data, width: 1180, height: 820 } })).toMatchObject({ ok: true })
+    result = await call()
+    expect(result.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
+    expect(result.content[0].text.split('\n')[0]).toMatch(/The attached image is exactly what is on the student's screen, taken \d+ s ago\.$/)
+    expect(result.structuredContent.view).toMatchObject({ width: 1180, height: 820 })
+    expect(JSON.stringify(result.structuredContent)).not.toContain(data)
+    expect(result.content[0].text).not.toContain(data)
+
+    // another device holding the page cannot replace it
+    const other = crypto.randomUUID()
+    expect(await tool(token, 'nb_put_view', { pageId, clientId: other, view: null })).toMatchObject({ ok: false, code: 'LEASE_HELD' })
+    const gif = (await rpc(token, 'tools/call', { name: 'nb_put_view', arguments: { pageId, clientId: client, view: { seen: 'screen', mime: 'image/gif', data, width: 1, height: 1 } } })).body
+    expect(!!gif.error || gif.result.isError === true, 'only PNG or JPEG is stored').toBe(true)
+    expect((await call()).content[1].data).toBe(data)
+
+    expect(await tool(token, 'nb_put_view', { pageId, clientId: client, view: null })).toMatchObject({ ok: true })
+    expect((await call()).content).toHaveLength(1)
+    expect(await tool(token, 'nb_put_view', { pageId: crypto.randomUUID(), clientId: client, view: null })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    const reader = (await signIn({ scopes: ['mcp:read'] }))!
+    expect(await tool(reader, 'nb_put_view', { pageId, clientId: client, view: null })).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE' })
+  })
+})
+
 describe('NOVA reads and edits a page through the model tools', () => {
   it('lists notebooks, reads a page, draws beside the student ink while the notebook is open, and the editor settles it', async () => {
     const token = (await signIn())!

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { acceptsPictures, notebookContext } from '../context'
+import { notebookContext } from '../context'
 
 const view = {
   notebook: { id: 'nb-1', name: 'Dynamics HW' },
@@ -27,17 +27,19 @@ test('a selection is described; the library has no page', () => {
 })
 
 test('the context says what the picture shows, or why there is none', () => {
-  assert.match(notebookContext(view, 'screen'), /exactly what is on the student's screen/)
-  assert.match(notebookContext(view, 'area'), /rectangle of the page the student chose/)
+  assert.match(notebookContext(view, 'screen'), /exactly what is on their screen/)
+  assert.match(notebookContext(view, 'area'), /rectangle of the page they snipped/)
   assert.match(notebookContext(view, 'page'), /whole page/)
-  assert.match(notebookContext(view, 'paused'), /paused sharing/)
-  assert.match(notebookContext(view, 'unsupported'), /does not take pictures/)
+  assert.match(notebookContext(view, 'paused'), /paused showing you/)
   assert.match(notebookContext(view, 'too-large'), /too large/)
+  assert.match(notebookContext(view, 'elsewhere'), /Another of the student's devices/)
 })
 
-test('pictures go to a host that lists images or lists no kinds, never to one that lists only text', () => {
-  assert.equal(acceptsPictures({ text: {}, image: {} }), true)
-  assert.equal(acceptsPictures({}), true)
-  assert.equal(acceptsPictures({ text: {} }), false)
-  assert.equal(acceptsPictures(undefined), false)
+test('when there is a picture, Claude is told to fetch it with nova_read_page for this page', () => {
+  for (const seen of ['screen', 'area', 'page', 'elsewhere'] as const) assert.match(notebookContext(view, seen), /call nova_read_page with pageId pg-2: its result includes this picture as an image/)
+  for (const seen of ['empty', 'paused', 'too-large'] as const) {
+    const text = notebookContext(view, seen)
+    assert.ok(!/call nova_read_page/.test(text), seen)
+    assert.match(text, /layout, not its handwriting/)
+  }
 })

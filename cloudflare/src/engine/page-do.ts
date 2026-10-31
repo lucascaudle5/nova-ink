@@ -3,7 +3,7 @@
  *
  * Tables (WITHOUT ROWID, so one logical row is one billed row write):
  *   strokes(id PK, key, json)        one row per stroke; `key` is its z-order key, `json` the nova-ink v1 stroke
- *   kv(key PK, value)                'head', 'paper', 'camera', 'lease'
+ *   kv(key PK, value)                'head', 'paper', 'camera', 'lease', 'view' (the picture shown to Claude)
  *   checkpoint_index / checkpoint_chunks   gzip'd whole-page checkpoints in <= 1,000,000-byte chunks
  *   quarantine(at, source, id, json) damaged rows kept when a page is restored from a checkpoint
  *
@@ -60,6 +60,7 @@ type Head = {
   restoredFrom?: number
 }
 type Lease = { clientId: string; until: number }
+export type PageView = { seen: 'screen' | 'area' | 'page'; mime: 'image/png' | 'image/jpeg'; data: string; width: number; height: number }
 type Row = { id: string; key: string; json: string }
 type Checkpoint = { rows: Row[]; paper: Paper; camera: Camera | null }
 
@@ -279,6 +280,25 @@ export class PageDO extends DurableObject {
       if (!isUuid(req?.clientId)) return fail('INVALID_REQUEST', 'Invalid editor client id.')
       if (this.getLease()?.clientId === req.clientId) this.setLease(null, true)
       return { ok: true }
+    })
+  }
+
+  /** Stores (or with null, forgets) the picture of what the editing notebook is showing Claude. Not page content. */
+  putView(req: { clientId: string; view: PageView | null }): Promise<Result> {
+    return this.serialize(() => {
+      this.rowsWritten = 0
+      if (!isUuid(req?.clientId)) return fail('INVALID_REQUEST', 'Invalid editor client id.')
+      if (this.heldByOther(req.clientId)) return fail('LEASE_HELD', 'Another device is editing this page.')
+      if (req.view) this.kvPut('view', JSON.stringify({ ...req.view, at: this.iso() }))
+      else this.run("DELETE FROM kv WHERE key = 'view'")
+      return { ok: true }
+    })
+  }
+
+  view(): Promise<(PageView & { at: string }) | null> {
+    return this.serialize(() => {
+      const raw = this.kvGet('view')
+      try { return raw ? JSON.parse(raw) : null } catch { return null }
     })
   }
 

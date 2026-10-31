@@ -19,6 +19,13 @@ import { ENGINE_WIDGET_HTML } from './widget.generated'
 export const ENGINE_VERSION = '0.3.0-engine'
 export const ENGINE_UI_URI = 'ui://nova-ink-engine/notebook'
 const TOUCH_EVERY_MS = 60_000
+/** Base64 length of the stored view; kept under the 2 MB SQLite row limit. */
+export const MAX_VIEW_BASE64 = 1_500_000
+const SEEN: Record<string, string> = {
+  screen: 'exactly what is on the student\'s screen',
+  area: 'the area of the page the student snipped to show you',
+  page: 'the whole page, as the student chose to show it',
+}
 /** Replaced in the served notebook with this Worker's origin, where it loads pdf.js from (see index.ts). */
 export const ASSET_ORIGIN_MARK = '__NOVA_ASSET_ORIGIN__'
 
@@ -38,9 +45,13 @@ const camera = z.object({ x: z.number(), y: z.number(), z: z.number() })
 const color = z.string().regex(/^#[0-9a-f]{6}$/)
 const stroke = z.record(z.string(), z.unknown())
 
-function result(data: Data, say?: (data: Data) => string) {
+type Picture = { data: string; mimeType: string }
+
+function result(data: Data, say?: (data: Data) => string, picture?: Picture) {
   const text = data.ok ? (say ? say(data) : 'NOVA Ink notebook operation completed.') : `NOVA Ink notebook error: ${String(data.message ?? data.code)}`
-  return { structuredContent: data as Record<string, unknown>, content: [{ type: 'text' as const, text }] }
+  const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text }]
+  if (data.ok && picture) content.push({ type: 'image', ...picture })
+  return { structuredContent: data as Record<string, unknown>, content }
 }
 
 const lastTouch = new Map<string, number>()
@@ -66,9 +77,10 @@ export function createEngineServer(ctx: ServerContext): McpServer {
       const message = error instanceof Error ? error.message : String(error)
       data = { ok: false, code: 'SERVER_ERROR', message: `Notebook server error: ${message}. The save was not confirmed.` }
     }
-    const { stats, ...clean } = data
-    console.log(JSON.stringify({ evt: 'tool', tool, ok: data.ok, code: data.code, ms: Date.now() - started, bytesIn: ctx.bytesIn, rows: stats?.rowsWritten }))
-    return result(clean as Data, say)
+    // `picture` travels as image content only, never inside the JSON.
+    const { stats, picture, ...clean } = data
+    console.log(JSON.stringify({ evt: 'tool', tool, ok: data.ok, code: data.code, ms: Date.now() - started, bytesIn: ctx.bytesIn, rows: stats?.rowsWritten, picture: picture ? String(picture.data).length : undefined }))
+    return result(clean as Data, say, picture)
   }
 
   /** The page's library entry if this user owns it; editing tools also refuse pages in the trash. */
@@ -168,6 +180,16 @@ export function createEngineServer(ctx: ServerContext): McpServer {
   tool('nb_heartbeat', 'Renew editing control of a page; returns requests from NOVA waiting to be applied', z.object({ pageId: uuid, clientId: uuid, applied: z.array(z.string().max(64)).max(50).optional() }), 'mcp:read', async a => {
     const own = await owned(a.pageId, false)
     return 'error' in own ? own.error : page(a.pageId).heartbeat({ clientId: a.clientId, applied: a.applied })
+  })
+  tool('nb_put_view', 'Store the picture of what the student is showing Claude (null when nothing is shown)', z.object({
+    pageId: uuid, clientId: uuid,
+    view: z.object({
+      seen: z.enum(['screen', 'area', 'page']), mime: z.enum(['image/png', 'image/jpeg']), data: z.string().min(1).max(MAX_VIEW_BASE64),
+      width: z.number().int().positive().max(8192), height: z.number().int().positive().max(8192),
+    }).nullable(),
+  }), 'mcp:write', async a => {
+    const own = await owned(a.pageId, false)
+    return 'error' in own ? own.error : page(a.pageId).putView({ clientId: a.clientId, view: a.view })
   })
   tool('nb_report_ops', 'Tell the server which of NOVA\'s requests the open notebook could not apply or found already applied', z.object({
     pageId: uuid, clientId: uuid,
@@ -286,17 +308,25 @@ export function createEngineServer(ctx: ServerContext): McpServer {
       return { ok: true, notebooks, sources: sources.sources }
     }, d => `${(d.notebooks as unknown[]).length} notebook(s), ${(d.sources as unknown[]).length} source document(s).`)
 
-  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is shown as regions (refs like "ink:..."), not read as text; ask the student what it says, or use the picture of the problem. Also reports whether the notebook is open and how many of your requests are still waiting.',
+  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. Also reports whether the notebook is open and how many of your requests are still waiting.',
     z.object({ pageId: uuid }), 'mcp:read', async a => {
       const own = await owned(a.pageId, false)
       if ('error' in own) return own.error
-      const scene = await page(a.pageId).scene() as Data
+      const [scene, shown] = await Promise.all([page(a.pageId).scene() as Promise<Data>, page(a.pageId).view() as Promise<{ seen: string; mime: string; data: string; width: number; height: number; at: string } | null>])
       if (!scene.ok) return scene
       if (scene.advanced) await touch(a.pageId, scene.advanced.revision, scene.advanced.savedAt, true)
       const metas = await library().imageMetas((scene.pictures as any[]).map(p => p.picture)) as Record<string, unknown>
       const { advanced: _advanced, ...rest } = scene
-      return { ...rest, page: { id: own.meta.id, title: own.meta.title, notebookId: own.meta.notebookId }, pictures: (scene.pictures as any[]).map(p => ({ ...p, source: metas[p.picture] ?? null })) }
-    }, d => `Page at revision ${d.revision}: ${(d.groups as unknown[]).length} group(s), ${(d.pictures as unknown[]).length} picture(s), ${(d.regions as unknown[]).length} handwriting region(s).`)
+      const view = shown ? { shows: SEEN[shown.seen] ?? shown.seen, width: shown.width, height: shown.height, takenAt: shown.at, ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(shown.at)) / 1000)) } : null
+      return {
+        ...rest, page: { id: own.meta.id, title: own.meta.title, notebookId: own.meta.notebookId }, pictures: (scene.pictures as any[]).map(p => ({ ...p, source: metas[p.picture] ?? null })),
+        view, ...(shown ? { picture: { data: shown.data, mimeType: shown.mime } } : {}),
+      }
+    }, d => {
+      const counts = `Page at revision ${d.revision}: ${(d.groups as unknown[]).length} group(s), ${(d.pictures as unknown[]).length} picture(s), ${(d.regions as unknown[]).length} handwriting region(s).`
+      const view = d.view as { shows: string; ageSeconds: number } | null
+      return view ? `${counts} The attached image is ${view.shows}, taken ${view.ageSeconds} s ago.` : `${counts} No image: the notebook is closed, paused, or showing an empty screen.`
+    })
 
   modelTool('nova_edit_page', 'Draw on or arrange a NOVA Ink page', `Change one page with a batch of operations (up to 40, applied together or not at all, as ONE undo step for the student). Use it only when the student asked you to draw, label, move or arrange something. It never deletes the student's handwriting. Everything you draw is tagged as NOVA's (author "nova", a boxed N, a purple color) and can be selected, moved, undone and erased like the student's own marks.
 Coordinates are page units; x grows right, y grows down. Prefer "place": { relativeTo: <id or group or "ink:..." ref from nova_read_page>, side: right|left|below|above, gap?, align?: start|center|end } over raw numbers; NOVA nudges clear of existing work.

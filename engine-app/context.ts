@@ -1,6 +1,6 @@
 /**
- * What Claude is told, without a model turn, about the open notebook: where the student is and, unless the student
- * paused it, a picture of their work. The host keeps only the latest update and shows it to the model with the
+ * What Claude is told, without a model turn, about the open notebook: where the student is and whether a picture of
+ * their work is waiting in nova_read_page. The host keeps only the latest update and shows it to the model with the
  * student's next message. No DOM, no network.
  */
 
@@ -16,22 +16,25 @@ export interface NotebookView {
 }
 
 /**
- * What the attached picture shows: the screen, a rectangle the student snipped, or the whole page; or why there is
- * no picture: the page is empty, the student paused sharing, the host takes no pictures, or it would be too large.
+ * What the picture stored for Claude shows: the screen, a rectangle the student snipped, or the whole page; or why
+ * there is none: the page is empty, the student paused it, it would be too large, or another device is editing.
  */
-export type Seen = 'screen' | 'area' | 'page' | 'empty' | 'paused' | 'unsupported' | 'too-large'
+export type Seen = 'screen' | 'area' | 'page' | 'empty' | 'paused' | 'too-large' | 'elsewhere'
+
+/** The kinds of Seen that come with a picture. */
+export const SHOWN: ReadonlySet<Seen> = new Set(['screen', 'area', 'page'])
 
 const count = (c: { strokes: number; pictures: number }) =>
   [c.strokes ? `${c.strokes} stroke${c.strokes === 1 ? '' : 's'}` : '', c.pictures ? `${c.pictures} picture${c.pictures === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ') || 'nothing'
 
 const SEEN_TEXT: Record<Seen, string> = {
-  screen: 'The attached picture is exactly what is on the student\'s screen now.',
-  area: 'The attached picture is a rectangle of the page the student chose (a snip); the rest of the page is not shown.',
-  page: 'The attached picture is the student\'s whole page, fitted to its content.',
-  empty: 'There is no work on screen, so no picture is attached.',
-  paused: 'The student paused sharing their page, so no picture is attached. Ask them to describe the work, or to turn sharing back on from the notebook\'s More menu.',
-  unsupported: 'This Claude app does not take pictures from the notebook, so the student\'s handwriting is not included. Ask them to describe the work or attach a screenshot.',
-  'too-large': 'The picture of the work is too large to attach. Ask the student to zoom in on the part they mean, or to snip it.',
+  screen: 'The student is showing you exactly what is on their screen.',
+  area: 'The student is showing you a rectangle of the page they snipped; the rest of the page is not shown.',
+  page: 'The student is showing you their whole page.',
+  empty: 'There is no work on screen, so there is no picture to show you.',
+  paused: 'The student paused showing you their page, so there is no picture of it. Ask them to describe the work, or to turn showing back on from the notebook\'s More menu.',
+  'too-large': 'The picture of the work is too large to show you. Ask the student to zoom in on the part they mean, or to snip it.',
+  elsewhere: 'Another of the student\'s devices is editing this page; the picture comes from that device.',
 }
 
 export function notebookContext(view: NotebookView, seen: Seen): string {
@@ -43,20 +46,15 @@ export function notebookContext(view: NotebookView, seen: Seen): string {
     `Page: "${view.page.title}", page ${view.page.number} of ${view.page.of} (pageId ${view.page.id}), ${view.paper.color} ${view.paper.pattern} paper, zoom ${Math.round(view.zoom * 100)}%.`,
     `On screen: ${count(view.onScreen)}.${selected ? ` Selected: ${count(view.selected)}.` : ''} Save status: ${view.status}.`,
     SEEN_TEXT[seen],
-    'nova_read_page gives the page\'s layout, not its handwriting. Answer what the student asks; do not offer hints or draw on the page unless they ask.',
+    SHOWN.has(seen) || seen === 'elsewhere'
+      ? `To see the student's work, including their handwriting, call nova_read_page with pageId ${view.page.id}: its result includes this picture as an image. Call it again for each new question, since the work changes.`
+      : 'nova_read_page gives the page\'s layout, not its handwriting.',
+    'Answer what the student asks; do not offer hints or draw on the page unless they ask.',
   ].join('\n')
 }
 
-/** Content kinds a host says it accepts, as in the MCP Apps host capabilities. */
-export type Modalities = object | undefined
-
-/** Whether the host takes pictures in model context. A channel declared without listing kinds is taken to accept them. */
-export function acceptsPictures(modalities: Modalities): boolean {
-  return !!modalities && (Object.keys(modalities).length === 0 || 'image' in modalities)
-}
-
-/** Largest base64 picture put in the model context. */
-export const MAX_PICTURE_BASE64 = 3_000_000
+/** Largest base64 picture stored for Claude; the server refuses more (it must stay under its 2 MB row limit). */
+export const MAX_VIEW_BASE64 = 1_500_000
 
 /** Base64 of a blob without building one huge string of characters in a single call. */
 export async function blobToBase64(blob: Blob): Promise<string> {
