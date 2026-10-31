@@ -16,6 +16,8 @@
   ],
   // OAUTH_KV: namespace "OAUTH_KV_ENGINE", created Oct 29, 2026 (an id is not a secret).
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "50f199597cee47f181c7dcd2eed908d5" }],
+  // Workers AI: nova_look transcribes the student's picture for Claude's voice mode (user decision, Oct 30, 2026).
+  "ai": { "binding": "AI", "remote": true },
   // Not a secret. The Worker fails closed while this or any secret is missing.
   "vars": { "PUBLIC_ORIGIN": "https://nova-ink-engine.ai-nova-personal.workers.dev" }
 }

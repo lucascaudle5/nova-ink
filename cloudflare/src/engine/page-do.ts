@@ -295,7 +295,19 @@ export class PageDO extends DurableObject {
     })
   }
 
-  view(): Promise<(PageView & { at: string }) | null> {
+  /** Keeps a transcription with the picture it was made from; dropped if the picture changed meanwhile. */
+  putTranscript(req: { at: string; transcript: { text: string; model: string } }): Promise<Result> {
+    return this.serialize(() => {
+      const raw = this.kvGet('view')
+      let view: (PageView & { at: string }) | null = null
+      try { view = raw ? JSON.parse(raw) : null } catch { /* treated as gone */ }
+      if (!view || view.at !== req.at) return { ok: true, stale: true }
+      this.kvPut('view', JSON.stringify({ ...view, transcript: req.transcript }))
+      return { ok: true }
+    })
+  }
+
+  view(): Promise<(PageView & { at: string; transcript?: { text: string; model: string } }) | null> {
     return this.serialize(() => {
       const raw = this.kvGet('view')
       try { return raw ? JSON.parse(raw) : null } catch { return null }

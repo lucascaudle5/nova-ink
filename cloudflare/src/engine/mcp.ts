@@ -14,6 +14,8 @@ import type { Item, Layout, Output } from './layout'
 import type { ServerContext } from '../app'
 import type { NotebookLibraryDO, PageMeta } from './library-do'
 import type { PageDO } from './page-do'
+import { transcribe } from './transcribe'
+import type { VisionAi } from './transcribe'
 import { ENGINE_WIDGET_HTML } from './widget.generated'
 
 export const ENGINE_VERSION = '0.3.0-engine'
@@ -33,6 +35,8 @@ export interface EngineEnv {
   PAGE: DurableObjectNamespace<PageDO>
   ENGINE_LIBRARY: DurableObjectNamespace<NotebookLibraryDO>
   PUBLIC_ORIGIN?: string
+  /** Workers AI, for transcribing the picture in nova_look. */
+  AI?: VisionAi
 }
 
 type Data = Record<string, any> & { ok: boolean }
@@ -328,25 +332,39 @@ export function createEngineServer(ctx: ServerContext): McpServer {
 
   /** The picture the editing notebook stored for Claude, described, and as image content. */
   async function storedView(pageId: string) {
-    const shown = await page(pageId).view() as { seen: string; mime: string; data: string; width: number; height: number; at: string } | null
+    const shown = await page(pageId).view() as { seen: string; mime: string; data: string; width: number; height: number; at: string; transcript?: { text: string; model: string } } | null
     if (!shown) return null
     return {
+      at: shown.at, transcript: shown.transcript ?? null,
       view: { shows: SEEN[shown.seen] ?? shown.seen, width: shown.width, height: shown.height, takenAt: shown.at, ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(shown.at)) / 1000)) },
       picture: { data: shown.data, mimeType: shown.mime, uri: `nova-ink://pages/${pageId}/view.${shown.mime === 'image/jpeg' ? 'jpg' : 'png'}` },
     }
   }
 
-  modelTool('nova_look', 'Look at the student\'s NOVA Ink screen', 'See what the student is showing you in NOVA Ink right now, as an image: their screen, or the area they snipped, handwriting included, with the notebook and page they are on. Call this whenever the student refers to their work ("look at this", "is this right?", "what did I do wrong?"), in text or voice conversation, and again for each new question, since the work changes. pageId is optional and usually left out: it defaults to the page the student has open, so do not ask them which page they are on.',
+  modelTool('nova_look', 'Look at the student\'s NOVA Ink screen', 'See what the student is showing you in NOVA Ink right now, as an image: their screen, or the area they snipped, handwriting included, with the notebook and page they are on. The result also has a text transcription of the picture, for when images do not reach you (such as in voice conversation). Call this whenever the student refers to their work ("look at this", "is this right?", "what did I do wrong?"), in text or voice conversation, and again for each new question, since the work changes. pageId is optional and usually left out: it defaults to the page the student has open, so do not ask them which page they are on.',
     z.object({ pageId: uuid.optional() }), 'mcp:read', async a => {
       const pageId = a.pageId ?? await openPageId()
       if (!pageId) return notFound()
       const own = await owned(pageId, false)
       if ('error' in own) return own.error
       const [shown, where] = await Promise.all([storedView(pageId), whereIs(pageId)])
-      return shown ? { ok: true, ...where, ...shown.view, picture: shown.picture } : { ok: true, ...where, shows: null }
-    }, d => d.shows
-      ? `The student is on ${placeText(d)}. The attached image is ${d.shows}, taken ${d.ageSeconds} s ago.`
-      : `The student is on ${placeText(d)}. No picture: the notebook is closed, paused, or showing an empty screen. Ask the student to open NOVA Ink or describe their work.`)
+      if (!shown) return { ok: true, ...where, shows: null }
+      // Text for hosts that pass no images to the model (Claude's voice mode); made once per picture.
+      let transcript = shown.transcript
+      let transcriptError: string | null = null
+      if (!transcript) {
+        const made = env.AI ? await transcribe(env.AI, shown.picture) : { error: 'transcription is not set up on this server' }
+        if ('text' in made) { transcript = made; ctx.waitUntil(Promise.resolve(page(pageId).putTranscript({ at: shown.at, transcript: made })).catch(() => {})) }
+        else { transcriptError = made.error; console.log(JSON.stringify({ evt: 'transcribe-failed', error: made.error.slice(0, 200) })) }
+      }
+      return { ok: true, ...where, ...shown.view, transcript: transcript?.text ?? null, transcribedBy: transcript?.model ?? null, transcriptError, picture: shown.picture }
+    }, d => {
+      if (!d.shows) return `The student is on ${placeText(d)}. No picture: the notebook is closed, paused, or showing an empty screen. Ask the student to open NOVA Ink or describe their work.`
+      const head = `The student is on ${placeText(d)}. The attached image is ${d.shows}, taken ${d.ageSeconds} s ago.`
+      return d.transcript
+        ? `${head} If you cannot see the image, use this transcription of it, made by a vision model (it can misread handwriting; check unclear parts with the student):\n---\n${d.transcript}\n---`
+        : `${head} No transcription is available (${d.transcriptError}); if you cannot see the image, ask the student to read out their work.`
+    })
 
   modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. To just look at the work, use nova_look. Also reports whether the notebook is open and how many of your requests are still waiting. pageId is optional; it defaults to the page the student has open, so do not ask them which page they are on.',
     z.object({ pageId: uuid.optional() }), 'mcp:read', async args => {

@@ -59,6 +59,8 @@ describe('the picture the student shows Claude', () => {
     expect(look.content.map((c: any) => c.type)).toEqual(['text', 'image', 'resource'])
     expect(look.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
     expect(look.content[0].text).toMatch(/^The student is on page 1 of 1, "Page 1", in notebook "Statics review \(test\)"\. The attached image is exactly what is on the student's screen, taken \d+ s ago\./)
+    // tests have no Workers AI, so the transcription is reported missing instead of invented
+    expect(look.content[0].text).toMatch(/No transcription is available \(.+\); if you cannot see the image, ask the student to read out their work\./)
 
     // another device holding the page cannot replace it
     const other = crypto.randomUUID()
