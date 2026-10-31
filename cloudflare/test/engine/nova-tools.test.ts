@@ -42,6 +42,13 @@ describe('NOVA reads and edits a page through the model tools', () => {
     expect(read).toMatchObject({ ok: true, revision: 1, editorOpen: true, pendingRequests: 0, page: { id: pageId } })
     expect(read.regions).toHaveLength(1)
     const ref = read.regions[0].ref as string
+    // A host that hands the model only the text still gives it the ids it needs to draw.
+    const { body } = await rpc(token, 'tools/call', { name: 'nova_read_page', arguments: { pageId } })
+    const text = body.result.content[0].text as string
+    expect(text.split('\n')[0]).toMatch(/^Page at revision 1/)
+    expect(JSON.parse(text.slice(text.indexOf('\n') + 1))).toMatchObject({ ok: true, page: { id: pageId }, regions: [{ ref }] })
+    const { body: appOnly } = await rpc(token, 'tools/call', { name: 'nb_list', arguments: {} })
+    expect(appOnly.result.content[0].text).not.toContain('{')
     expect(ref).toBe('ink:work1')
 
     const requestId = rid()

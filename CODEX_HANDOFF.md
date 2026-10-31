@@ -268,6 +268,18 @@ NOVA Ink connects to the personal Gemini app as a custom MCP app (Settings > Con
 - 53ea5e20: serve only the 2025 protocol (`legacyStatelessFallback` instead of `createMcpHandler`). The discover probe now gets HTTP 400 "Unsupported protocol version" with the 2025 list; Claude (`Anthropic/ClaudeAI`, protocol 2025-11-25, declares the ui extension with `text/html;profile=mcp-app`) falls back to `initialize` and reads the notebook resource (429,485 bytes). Also seen connecting: `Anthropic/Toolbox` and `claude-code` (no ui extension). Revisit the 2026 path when Claude supports MCP Apps on it.
 - Open bug from the same screenshot: Ask NOVA (snip) refused with "this Claude app does not accept pictures from the notebook", so the host's `message` capability did not list `image` (exact value not yet logged).
 
+**Fitted to Claude (October 30, 2026, ~10:05 PM; user picked: context, theme, drawing, iPad, naming; committed and pushed on engine/spike; NOT deployed):**
+- Ask NOVA: `askDelivery` (engine-app/ask.ts) follows the host's declared capabilities. If `message` takes images (or declares no modalities), the picture goes in the message. Otherwise, if `updateModelContext` takes images, the picture is staged in model context and a text-only message says it is attached. If neither, the refusal now names what the host does accept.
+- Claude's context: while the notebook is open, the app keeps model context current (debounced 1.5 s, only on change) with the notebook, page title/number/id, paper, zoom, counts on screen and selected, and save status. It never includes handwriting or pictures, and never sends a message (engine-app/context.ts).
+- Naming: NOVA is the tutor in student-facing text (disclosure, empty-snip refusals, note placeholder, snip title); "Claude" only for the host (connecting, what it accepts).
+- Theme: applies Claude's theme (`applyDocumentTheme`), style variables and fonts. A dark host turns the chrome dark (same rules as dark paper) and the library/sheets use the host's `--color-*` variables with light/dark fallbacks; paper and ink colors are unchanged. Host font CSS may be blocked by our CSP if it loads from an Anthropic domain; the system font is the fallback.
+- iPad: all toolbar, page-row, library, menu and sheet buttons are at least 44 px; panels and bottom bars re-spaced for the taller toolbars. Checked in the preview at 820×1180: no visible button under 44 px.
+- Model tools: every `nova_*` result now carries its full JSON after the one-line summary in the text content, so the model gets ids and bounds even if Claude passes only text. App-only `nb_*` results are unchanged (short text, data in `structuredContent`).
+
+**Checks (this Windows PC):** `tsc -p engine-app` clean; `test:engine-app` 39/39; `build:engine-app` OK (434 KB); `test:browser` 16/16; cloudflare `tsc` clean; `test:engine` 56/56. Dark/light library and sheet checked by screenshot in the local preview with the host-dark class set by hand; not seen in Claude.
+
+**Not verified:** all of the above inside Claude; which image route Claude accepts; whether Claude's top navigation bar is reported in `safeAreaInsets.top` on iPad.
+
 **Next steps:** (1) With the user's go-ahead, deploy (`cd cloudflare; npm run deploy:engine`). (2) The user adds the connector on claude.ai web: Customize > Connectors > Add > Custom > Web, URL `https://nova-ink-engine.ai-nova-personal.workers.dev/mcp`, sign in through Access. (3) On the iPad, in the Claude app, start a chat with the connector on, say "Open NOVA Ink", and run the quick check in IPAD_ACCEPTANCE.md plus Ask NOVA and a PDF insert. (4) Remove the ChatGPT connector, and delete the `nova-gemini-probe` Worker and the Gemini custom app when the user agrees.
 
 ### Long-term foundations

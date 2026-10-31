@@ -47,7 +47,7 @@ const lastTouch = new Map<string, number>()
 
 export function createEngineServer(ctx: ServerContext): McpServer {
   const env = ctx.env as EngineEnv
-  // Hosts on the server/discover handshake (Claude) render the notebook only when the server declares MCP Apps here.
+  // Hosts render the notebook only when the server declares MCP Apps here.
   const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION }, { capabilities: { extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } } } })
   const assetOrigin = (() => { try { return new URL(String(env.PUBLIC_ORIGIN)).origin } catch { return '' } })()
   const library = () => env.ENGINE_LIBRARY.get(env.ENGINE_LIBRARY.idFromName(`engine-library:${ctx.userId}`)) as any
@@ -266,11 +266,12 @@ export function createEngineServer(ctx: ServerContext): McpServer {
   const requestId = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).describe('A fresh unique id you choose for this request (8 to 64 letters, digits, - or _). Repeating a request with the SAME id never repeats its effect, so retry with the same id; use a NEW id for each new action.')
   const crop = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.02).max(1), h: z.number().min(0.02).max(1) })
     .describe('A rectangle on the PDF page as fractions of its width and height (x, y = top-left; w, h = size)')
+  // The model may see only the text of a result, so it carries the full data after the one-line summary.
   const modelTool = <S extends z.ZodObject<any>>(toolName: string, title: string, description: string, schema: S, scope: 'mcp:read' | 'mcp:write', body: (args: z.infer<S>) => Promise<Data>, say?: (data: Data) => string) =>
     registerAppTool(server, toolName, {
       title, description, inputSchema: schema, _meta: {},
       annotations: { readOnlyHint: scope === 'mcp:read', destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, ((args: z.infer<S>) => run(toolName, scope, () => body(args), say)) as any)
+    }, ((args: z.infer<S>) => run(toolName, scope, () => body(args), d => `${say ? say(d) : 'Done.'}\n${JSON.stringify(d)}`)) as any)
   const live = async (): Promise<Array<{ id: string; name: string; folderId: string | null; pages: Array<{ id: string; title: string; revision: number }> }>> => {
     const data = await library().list() as Data
     return (data.notebooks as any[]).filter(n => !n.deletedAt).map(n => ({
@@ -405,7 +406,7 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
 
   registerAppResource(server, 'NOVA Ink Notebook', ENGINE_UI_URI, { mimeType: RESOURCE_MIME_TYPE }, async () => {
     if (!ctx.scopes.includes('mcp:read')) throw new Error('mcp:read permission required')
-    // One line per fetch of the notebook UI, so a host's use of it (Gemini reads it when it registers the tools) can be seen in the Worker's logs.
+    // One line per fetch of the notebook UI, so a host's use of it can be seen in the Worker's logs.
     console.log(JSON.stringify({ evt: 'ui-resource', uri: ENGINE_UI_URI, bytes: ENGINE_WIDGET_HTML.length }))
     return {
       contents: [{
