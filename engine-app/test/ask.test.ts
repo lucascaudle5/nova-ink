@@ -60,7 +60,7 @@ test('nothing is sent for an empty view or an image over 3 MB; an empty note is 
   assert.equal(askRefusal(ok, MAX_IMAGE_BASE64), null)
 })
 
-test('the disclosure says ChatGPT sees what is on screen', () => {
+test('the disclosure says Claude sees what is on screen', () => {
   assert.ok(ASK_DISCLOSURE.includes('on screen') && ASK_DISCLOSURE.includes('selection') && ASK_DISCLOSURE.includes('area'))
 })
 

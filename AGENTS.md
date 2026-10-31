@@ -1,7 +1,7 @@
 # NOVA Ink — Codex Repository Instructions
 
 ## Purpose
-Build an iPad-first, Apple Pencil engineering notebook in ChatGPT using tldraw and MCP Apps. Maintain the working prototype; do not rebuild from scratch.
+Build an iPad-first, Apple Pencil engineering notebook in the Claude iPad app using the NOVA-owned engine and MCP Apps. Claude is the only target host (decided October 30, 2026); ChatGPT and Gemini are no longer supported. Maintain the working prototype; do not rebuild from scratch.
 
 ## Read first
 - README.md for scripts, storage, evidence, and limitations.
@@ -40,7 +40,7 @@ Current status, verification, and next work live only in CODEX_HANDOFF.md; do no
 
 ## iPad testing is not a development gate
 - Development, including PDF page import and v0.3 work, proceeds without waiting for iPad acceptance. The user tests on iPad in occasional batches using IPAD_ACCEPTANCE.md.
-- Always report honestly which behavior is verified on iPad (user-reported), which only by automated tests, and which only by desktop ChatGPT. Never imply iPad verification that did not happen.
+- Always report honestly which behavior is verified on iPad (user-reported), which only by automated tests, and which only by desktop Claude. Never imply iPad verification that did not happen.
 
 ## Testing and compatibility rules
 - Tests must use temporary directories (see tests/helpers). Session tests run the real MCP server in-memory via tests/helpers/harness.mjs. Prefer behavioral tests over source-regex tests.

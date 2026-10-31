@@ -34,7 +34,7 @@ describe('engine tools', () => {
     const tools = body.result.tools as any[]
     expect(tools.map(t => t.name).sort()).toEqual([
       'nb_add_page', 'nb_create_folder', 'nb_create_notebook', 'nb_get_image', 'nb_heartbeat', 'nb_list', 'nb_list_checkpoints', 'nb_move_page', 'nb_open_page', 'nb_put_image', 'nb_release',
-      'nb_report_ops', 'nb_set_image_meta', 'nb_get_source_chunk', 'nb_job_done', 'nb_jobs', 'nb_put_source_chunk', 'nova_edit_page', 'nova_import_file', 'nova_list_notebooks', 'nova_op_status', 'nova_organize', 'nova_place_source', 'nova_read_page',
+      'nb_report_ops', 'nb_set_image_meta', 'nb_get_source_chunk', 'nb_job_done', 'nb_jobs', 'nb_put_source_chunk', 'nova_edit_page', 'nova_list_notebooks', 'nova_op_status', 'nova_organize', 'nova_place_source', 'nova_read_page',
       'nb_remove_folder', 'nb_remove_notebook', 'nb_remove_page', 'nb_rename_folder', 'nb_rename_notebook', 'nb_rename_page', 'nb_restore_checkpoint',
       'nb_restore_folder', 'nb_restore_notebook', 'nb_restore_page', 'nb_save_page', 'nb_update_notebook', 'open_nova_notebook',
     ].sort())
@@ -46,7 +46,7 @@ describe('engine tools', () => {
         expect(t.annotations.destructiveHint, t.name).toBe(false)
       } else expect(t._meta.ui.visibility, t.name).toEqual(['app'])
     }
-    expect(tools.find(t => t.name === 'nova_import_file')._meta['openai/fileParams']).toEqual(['file'])
+    expect(JSON.stringify(tools)).not.toContain('openai/')
     expect(tools.find(t => t.name === 'nova_read_page').annotations.readOnlyHint).toBe(true)
     expect(tools.find(t => t.name === 'nova_edit_page').annotations.readOnlyHint).toBe(false)
     const resource = await rpc(token, 'resources/read', { uri: 'ui://nova-ink-engine/notebook' })
@@ -54,6 +54,8 @@ describe('engine tools', () => {
     expect(content.text).toMatch(/<(!doctype|html)/i)
     expect(content.text).not.toContain('__NOVA_ASSET_ORIGIN__')
     expect(content._meta.ui.csp).toEqual({ resourceDomains: [ORIGIN, 'data:'], connectDomains: [ORIGIN] })
+    expect(content._meta.ui.prefersBorder).toBe(false)
+    expect(Object.keys(content._meta)).toEqual(['ui'])
   })
 
   it('serves pdf.js (public library code) for PDF import without sign-in, and nothing else under /assets/pdfjs/', async () => {

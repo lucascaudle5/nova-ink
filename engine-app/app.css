@@ -2,8 +2,18 @@
 html, body { overflow: hidden; }
 body { min-height: 480px; }
 
+/* Edges of the area the host leaves tappable; applyHost raises them by the host's safe-area insets. */
+:root {
+  --bottom: max(12px, env(safe-area-inset-bottom));
+  --left: max(12px, env(safe-area-inset-left));
+  --right: max(12px, env(safe-area-inset-right));
+}
+.corner, .menu { right: var(--right); }
+.zoombar { right: var(--right); bottom: var(--bottom); }
+.status { left: var(--left); bottom: var(--bottom); }
+
 /* Drawing tools: a vertical rail on the left edge under the top bar, so the top row only holds navigation and actions. */
-.rail { top: calc(var(--top) + 64px); left: max(12px, env(safe-area-inset-left)); flex-direction: column; gap: 2px; }
+.rail { top: calc(var(--top) + 64px); left: var(--left); flex-direction: column; gap: 2px; }
 .rail .sep { width: 24px; height: 1px; margin: 5px 0; }
 .rail button.pen-tool { position: relative; }
 .pen-dot { position: absolute; right: 5px; bottom: 5px; width: 11px; height: 11px; border-radius: 50%; background: #1b1f24; box-shadow: 0 0 0 2px #fff, inset 0 0 0 1px rgba(0, 0, 0, .2); }
@@ -21,7 +31,7 @@ body.dark-paper .pen-flyout .slots button { color: #c9cfd6; }
 body.dark-paper .pen-flyout .slots button.current { background: rgba(255, 255, 255, .09); }
 body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(255, 255, 255, .25); }
 
-.pagesbar { left: max(12px, env(safe-area-inset-left)); }
+.pagesbar { left: var(--left); }
 .floating button.pages-button { width: auto; max-width: 220px; padding: 0 10px 0 8px; gap: 8px; display: flex; align-items: center; }
 .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 
@@ -42,7 +52,7 @@ body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(2
 .status .actions button[data-armed="1"], .pages button[data-armed="1"] { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 .pages {
-  top: calc(var(--top) + 60px); left: max(12px, env(safe-area-inset-left)); width: 300px; max-height: calc(100vh - var(--top) - 140px);
+  top: calc(var(--top) + 60px); left: var(--left); width: 300px; max-height: calc(100vh - var(--top) - var(--bottom) - 128px);
   display: flex; flex-direction: column; overflow: hidden; transform-origin: top left;
 }
 .pages header { display: flex; gap: 6px; align-items: center; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); }
@@ -62,7 +72,7 @@ body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(2
 .pages .empty { padding: 10px; color: var(--muted); }
 
 .selection-bar {
-  top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 56px); left: 50%; transform: translateX(-50%);
+  top: auto; bottom: calc(var(--bottom) + 56px); left: 50%; transform: translateX(-50%);
   gap: 6px; padding: 6px 6px 6px 14px; font-size: 13px; font-weight: 600; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 24px);
 }
 .selection-bar[hidden] { display: none; }
@@ -70,7 +80,7 @@ body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(2
 .floating.selection-bar button.danger { color: var(--danger); }
 
 .snip-bar {
-  position: fixed; z-index: 6; top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 56px); left: 50%; transform: translateX(-50%);
+  position: fixed; z-index: 6; top: auto; bottom: calc(var(--bottom) + 56px); left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 14px; width: min(460px, calc(100vw - 24px)); box-sizing: border-box;
 }
 .snip-bar[hidden] { display: none; }
@@ -98,7 +108,7 @@ body.dark-paper .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(2
 body.in-library .status { z-index: 9; }
 .library-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: var(--top) max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left));
+  padding: var(--top) max(20px, var(--right)) 12px max(20px, var(--left));
 }
 .library-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .library-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -116,7 +126,7 @@ body.in-library .status { z-index: 9; }
 .library-grid {
   flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; align-content: start;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 28px 22px;
-  padding: 8px max(20px, env(safe-area-inset-right)) calc(max(12px, env(safe-area-inset-bottom)) + 72px) max(20px, env(safe-area-inset-left));
+  padding: 8px max(20px, var(--right)) calc(var(--bottom) + 72px) max(20px, var(--left));
 }
 .tile { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .tile .cover {
@@ -198,7 +208,3 @@ body.dark-paper .status .actions button, body.dark-paper .pages button.text, bod
 .ask-result { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
 .ask-result[data-tone="bad"] { color: var(--danger); font-weight: 600; }
 .ask-result[data-tone="ok"] { color: #1a7f37; font-weight: 600; }
-
-/* ChatGPT's full-screen composer covers the bottom centre (about 56 px tall plus margin): lift the status above it and let it use the width. */
-body.host-composer .status { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 68px); max-width: calc(100vw - 24px); flex-wrap: wrap; border-radius: 18px; }
-body.host-composer .selection-bar, body.host-composer .snip-bar { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 124px); }

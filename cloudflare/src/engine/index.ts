@@ -1,6 +1,6 @@
 /**
  * Worker entry for the engine notebook (`nova-ink-engine`): the same sign-in layer as the tldraw test Worker
- * (OAuth for ChatGPT, Cloudflare Access with one allowed email, fail closed) in front of the engine tools.
+ * (OAuth for Claude, Cloudflare Access with one allowed email, fail closed) in front of the engine tools.
  *
  * Also serves pdf.js at /assets/pdfjs/<file> without sign-in: public library code (no user data), fetched by
  * the notebook only when the user imports a PDF, so the notebook itself stays small.
@@ -29,7 +29,7 @@ export function servePdfjs(request: Request): Response | null {
   return new Response(request.method === 'HEAD' ? null : body, {
     headers: {
       'content-type': 'text/javascript; charset=utf-8',
-      // The notebook runs in ChatGPT's sandboxed frame (an opaque origin), so module imports need CORS.
+      // The notebook runs on Claude's sandbox origin (*.claudemcpcontent.com), so module imports need CORS.
       'access-control-allow-origin': '*',
       'cache-control': 'public, max-age=86400',
       'x-content-type-options': 'nosniff',

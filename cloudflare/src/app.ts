@@ -72,7 +72,7 @@ function consentPage(details: ConsentDescription, handle: string, label: string)
 function authorizationFailure(error: unknown): Response {
   if (error instanceof AuthorizationError) {
     if (error.redirectTo) return new Response(null, { status: 302, headers: { Location: error.redirectTo, 'cache-control': 'no-store' } })
-    return page('Sign-in problem', `<p>${escapeHtml(error.description)}</p><p>Start again from ChatGPT.</p>`, 400)
+    return page('Sign-in problem', `<p>${escapeHtml(error.description)}</p><p>Start again from Claude.</p>`, 400)
   }
   if (error instanceof CimdFetchError) return page('Sign-in problem', '<p>This app could not be verified.</p>', 400)
   throw error

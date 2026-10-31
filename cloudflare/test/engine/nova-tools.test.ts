@@ -214,21 +214,4 @@ describe('source documents: stored as uploaded, rendered by the open notebook, p
     const j2 = await tool(token, 'nova_place_source', { requestId: rid(), sourceId: 'src-small', notebookId: book.notebookId, pages: '1' })
     expect(await tool(token, 'nb_job_done', { jobId: j2.jobId, outputs: [{ imageId: 'never-uploaded', width: 100, height: 100 }] })).toMatchObject({ ok: true, status: 'failed' })
   })
-
-  it('imports an attached file through a download link, and refuses links that are not https or are not PDFs', async () => {
-    const token = (await signIn())!
-    const real = globalThis.fetch
-    const pdf = fakePdf(2000)
-    ;(globalThis as any).fetch = async (input: any) => String(input).includes('notpdf') ? new Response(new Uint8Array(50)) : new Response(pdf, { headers: { 'content-length': String(pdf.length) } })
-    try {
-      const requestId = rid()
-      const a = await tool(token, 'nova_import_file', { requestId, file: { download_url: 'https://files.example/syllabus-review.pdf', file_id: 'file_1' } })
-      expect(a).toMatchObject({ ok: true, name: 'syllabus-review.pdf' })
-      expect(await tool(token, 'nova_import_file', { requestId, file: { download_url: 'https://files.example/syllabus-review.pdf', file_id: 'file_1' } })).toMatchObject({ ok: true, duplicate: true, sourceId: a.sourceId })
-      expect((await tool(token, 'nova_list_notebooks')).sources.some((s: any) => s.id === a.sourceId)).toBe(true)
-      expect(await tool(token, 'nova_import_file', { requestId: rid(), file: { download_url: 'http://files.example/a.pdf', file_id: 'f' } })).toMatchObject({ ok: false, code: 'INVALID_REQUEST' })
-      expect(await tool(token, 'nova_import_file', { requestId: rid(), file: { download_url: 'https://127.0.0.1/a.pdf', file_id: 'f' } })).toMatchObject({ ok: false, code: 'INVALID_REQUEST' })
-      expect(await tool(token, 'nova_import_file', { requestId: rid(), file: { download_url: 'https://files.example/notpdf', file_id: 'f' } })).toMatchObject({ ok: false, code: 'INVALID_DOCUMENT' })
-    } finally { (globalThis as any).fetch = real }
-  })
 })

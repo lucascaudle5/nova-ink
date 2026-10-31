@@ -186,7 +186,7 @@ if (preview) {
   api = mock.api
   ;(window as unknown as { novaMock: MockServer }).novaMock = mock
 } else {
-  app = new App({ name: 'NOVA Ink', version: VERSION }, {})
+  app = new App({ name: 'NOVA Ink', version: VERSION }, { availableDisplayModes: ['inline', 'fullscreen'] })
   api = hostApi(app)
 }
 
@@ -387,14 +387,32 @@ function renderSelectionBar() {
   $<HTMLButtonElement>('insert-image').disabled = inserting || surface.readOnly
 }
 
+/** Claude overlays its navigation bar and chat input on a full-screen app; only the safe area it reports can be tapped. */
+const COMPOSER_FALLBACK = 68
+
 function applyHost(context: McpUiHostContext | undefined) {
   host = context
-  // In full screen ChatGPT floats its "Ask ChatGPT" box over the bottom centre; keep the status and its buttons clear of it.
-  document.body.classList.toggle('host-composer', !!app && context?.displayMode === 'fullscreen')
-  const top = context?.safeAreaInsets?.top ?? 0
-  document.documentElement.style.setProperty('--top', `max(12px, env(safe-area-inset-top), ${top + 12}px)`)
+  const fullscreen = !!app && context?.displayMode === 'fullscreen'
+  const inset = context?.safeAreaInsets
+  // A full-screen host that reports no bottom inset still draws its chat input over the bottom edge.
+  const bottom = inset?.bottom || (fullscreen ? COMPOSER_FALLBACK : 0)
+  const root = document.documentElement.style
+  root.setProperty('--top', `max(12px, env(safe-area-inset-top), ${(inset?.top ?? 0) + 12}px)`)
+  root.setProperty('--bottom', `max(12px, env(safe-area-inset-bottom), ${bottom + 12}px)`)
+  root.setProperty('--left', `max(12px, env(safe-area-inset-left), ${(inset?.left ?? 0) + 12}px)`)
+  root.setProperty('--right', `max(12px, env(safe-area-inset-right), ${(inset?.right ?? 0) + 12}px)`)
+  $('fullscreen-button').hidden = !app || fullscreen || !context?.availableDisplayModes?.includes('fullscreen')
   renderMenu()
 }
+
+async function goFullscreen() {
+  if (!app || !host?.availableDisplayModes?.includes('fullscreen') || host.displayMode === 'fullscreen') return
+  try {
+    const { mode } = await app.requestDisplayMode({ mode: 'fullscreen' })
+    applyHost({ ...host, displayMode: mode })
+  } catch { /* the full-screen button stays available */ }
+}
+$('fullscreen-button').addEventListener('click', () => void goFullscreen())
 
 // ---- Status pill ----
 
@@ -884,13 +902,18 @@ async function sendAsk(question: string, scope: AskScope, say: (text: string, to
   const message = askMessage(input, png)
   if (!app) {
     askLog.push({ role: message.role, content: message.content.map(c => c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', mimeType: c.mimeType, bytes: c.data.length }) })
-    say('Preview: logged in window.novaAskLog; nothing was sent to ChatGPT.', 'ok')
+    say('Preview: logged in window.novaAskLog; nothing was sent to Claude.', 'ok')
     return true
   }
-  say('Sending to ChatGPT…')
+  const accepts = app.getHostCapabilities()?.message
+  if (!accepts || (Object.keys(accepts).length > 0 && !accepts.image)) {
+    say('Not sent: this Claude app does not accept pictures from the notebook.', 'bad')
+    return false
+  }
+  say('Sending to Claude…')
   try {
     const answer = await app.sendMessage(message)
-    if (answer.isError) throw new Error('ChatGPT did not accept the message')
+    if (answer.isError) throw new Error('Claude did not accept the message')
   } catch (error) {
     say(`Not sent: ${error instanceof Error ? error.message : String(error)}`, 'bad')
     return false
@@ -929,7 +952,7 @@ function askSheet() {
     }))
   }
   paintScope()
-  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for ChatGPT if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
+  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for Claude if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
   const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
   const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
   const send = action('Send', async () => {
@@ -989,7 +1012,7 @@ function renderSnipBar() {
 }
 
 $('snip-cancel').addEventListener('click', () => surface.endSnip())
-$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show ChatGPT.', 'bad') })
+$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show Claude.', 'bad') })
 $('snip-send').addEventListener('click', async () => {
   const area = surface.snipArea
   if (!area || snipSending) return
@@ -1080,13 +1103,14 @@ async function boot() {
   render()
   if (app) {
     app.onhostcontextchanged = update => applyHost({ ...host, ...update })
-    // ChatGPT may notify the app before removing it; best effort only.
+    // The host may notify the app before removing it; best effort only.
     app.onteardown = async () => { await session.teardown(); return {} }
     try { await app.connect(new PostMessageTransport(window.parent, window.parent)) } catch (error) {
-      $('status-text').textContent = `Could not connect to ChatGPT: ${error instanceof Error ? error.message : String(error)}`
+      $('status-text').textContent = `Could not connect to Claude: ${error instanceof Error ? error.message : String(error)}`
       return
     }
     applyHost(app.getHostContext())
+    void goFullscreen()
   }
   await session.start()
   if (preview && new URLSearchParams(location.search).has('library')) showLibrary(true)
