@@ -1,4 +1,4 @@
-import { App, PostMessageTransport } from '@modelcontextprotocol/ext-apps'
+import { App, PostMessageTransport, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps'
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps'
 import { PAPER_COLORS, PAPER_PATTERNS } from '../engine/src/core/paper'
 import type { Paper, PaperColor, PaperPattern } from '../engine/src/core/paper'
@@ -404,6 +404,13 @@ function applyHost(context: McpUiHostContext | undefined) {
   root.setProperty('--left', `max(12px, env(safe-area-inset-left), ${(inset?.left ?? 0) + 12}px)`)
   root.setProperty('--right', `max(12px, env(safe-area-inset-right), ${(inset?.right ?? 0) + 12}px)`)
   $('fullscreen-button').hidden = !app || fullscreen || !context?.availableDisplayModes?.includes('fullscreen')
+  // Claude's theme, colors and fonts dress the chrome, library and sheets; the paper and ink keep their own colors.
+  if (context?.theme) {
+    applyDocumentTheme(context.theme)
+    document.body.classList.toggle('host-dark', context.theme === 'dark')
+  }
+  if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables)
+  if (context?.styles?.css?.fonts) applyHostFonts(context.styles.css.fonts)
   renderMenu()
 }
 

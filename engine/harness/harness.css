@@ -10,7 +10,7 @@
   --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 8px 24px rgba(15, 23, 42, .10);
 }
 
-html, body { margin: 0; height: 100%; font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--paper); color: var(--ink); }
+html, body { margin: 0; height: 100%; font: 14px/1.35 var(--font-sans, system-ui), -apple-system, "Segoe UI", sans-serif; background: var(--paper); color: var(--ink); }
 /* iOS Safari otherwise treats quick repeated taps (Undo, Undo) as a double-tap and drops one. */
 button, label, input { touch-action: manipulation; }
 body { display: flex; flex-direction: column; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
@@ -108,23 +108,24 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .popover .segmented button { flex: 1; padding: 7px 6px; border: 0; border-radius: 8px; background: transparent; font-size: 12.5px; color: #3d434b; }
 .popover .segmented button.current { background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); color: var(--ink); font-weight: 600; }
 
-/* Dark paper: the chrome goes dark too, so light ink previews stay visible. */
-body.dark-paper { --ink: #e6e8eb; --muted: #9aa3ae; --line: #3a404a; --accent: #6ea8fe; --accent-soft: rgba(110, 168, 254, .16); --paper: #16181c; color: var(--ink); }
-body.dark-paper .floating, body.dark-paper .panel { background: rgba(36, 40, 47, .94); border-color: rgba(255, 255, 255, .08); box-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35); }
-body.dark-paper .floating button { color: #c9cfd6; }
-body.dark-paper .floating button:active, body.dark-paper #width-slots button.current { background: rgba(255, 255, 255, .09); }
-body.dark-paper .floating button.active { background: var(--accent-soft); color: var(--accent); }
-body.dark-paper #color-slots button.current .swatch { box-shadow: 0 0 0 2px #24282f, 0 0 0 4px currentColor; }
-body.dark-paper .popover .palette button.current { box-shadow: 0 0 0 2px #24282f, 0 0 0 4px var(--ink); }
+/* Dark paper or a dark host: the chrome goes dark, so light ink previews stay visible. The paper itself only follows the page. */
+body:is(.dark-paper, .host-dark) { --ink: #e6e8eb; --muted: #9aa3ae; --line: #3a404a; --accent: #6ea8fe; --accent-soft: rgba(110, 168, 254, .16); color: var(--ink); }
+body.dark-paper { --paper: #16181c; }
+body:is(.dark-paper, .host-dark) .floating, body:is(.dark-paper, .host-dark) .panel { background: rgba(36, 40, 47, .94); border-color: rgba(255, 255, 255, .08); box-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35); }
+body:is(.dark-paper, .host-dark) .floating button { color: #c9cfd6; }
+body:is(.dark-paper, .host-dark) .floating button:active, body:is(.dark-paper, .host-dark) #width-slots button.current { background: rgba(255, 255, 255, .09); }
+body:is(.dark-paper, .host-dark) .floating button.active { background: var(--accent-soft); color: var(--accent); }
+body:is(.dark-paper, .host-dark) #color-slots button.current .swatch { box-shadow: 0 0 0 2px #24282f, 0 0 0 4px currentColor; }
+body:is(.dark-paper, .host-dark) .popover .palette button.current { box-shadow: 0 0 0 2px #24282f, 0 0 0 4px var(--ink); }
 body.dark-paper .popover .preview { background: #16181c; }
-body.dark-paper .popover .custom input[type=text] { background: #1b1e23; color: var(--ink); }
-body.dark-paper .popover .segmented { background: rgba(255, 255, 255, .06); }
-body.dark-paper .popover .segmented button { color: #c9cfd6; }
-body.dark-paper .popover .segmented button.current { background: #3a404a; color: #fff; }
-body.dark-paper .status { background: rgba(36, 40, 47, .85); border-color: rgba(255, 255, 255, .06); }
-body.dark-paper .menu .danger { color: #ff7b8a; }
+body:is(.dark-paper, .host-dark) .popover .custom input[type=text] { background: #1b1e23; color: var(--ink); }
+body:is(.dark-paper, .host-dark) .popover .segmented { background: rgba(255, 255, 255, .06); }
+body:is(.dark-paper, .host-dark) .popover .segmented button { color: #c9cfd6; }
+body:is(.dark-paper, .host-dark) .popover .segmented button.current { background: #3a404a; color: #fff; }
+body:is(.dark-paper, .host-dark) .status { background: rgba(36, 40, 47, .85); border-color: rgba(255, 255, 255, .06); }
+body:is(.dark-paper, .host-dark) .menu .danger { color: #ff7b8a; }
 @media (hover: hover) {
-  body.dark-paper .floating button:not(:disabled):not(.active):hover, body.dark-paper .menu button:hover, body.dark-paper .menu .file:hover { background: rgba(255, 255, 255, .07); }
+  body:is(.dark-paper, .host-dark) .floating button:not(:disabled):not(.active):hover, body:is(.dark-paper, .host-dark) .menu button:hover, body:is(.dark-paper, .host-dark) .menu .file:hover { background: rgba(255, 255, 255, .07); }
 }
 
 #stats { position: fixed; z-index: 4; right: 16px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 64px); background: rgba(27, 31, 36, .88); color: #e8eaed; font: 12px/1.4 ui-monospace, Consolas, monospace; padding: 10px 12px; border-radius: 10px; white-space: pre; pointer-events: none; max-width: 46ch; }
