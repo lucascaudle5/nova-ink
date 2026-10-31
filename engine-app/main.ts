@@ -6,8 +6,10 @@ import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MAX_WIDTH, MIN_WIDTH, PALETTE } from '../engine/harness/presets'
 import { MockServer } from './mock-server'
-import { ASK_DISCLOSURE, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
+import { ASK_DISCLOSURE, askDelivery, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
 import type { AskInput, AskScope, HelpLevel } from './ask'
+import { notebookContext } from './context'
+import type { NotebookView } from './context'
 import type { Bounds } from '../engine/src/core/types'
 import { JobRunner } from './jobs'
 import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES, PDF_MAX_SIDE } from './pdf'
@@ -848,6 +850,8 @@ function folderSheet(f: FolderInfo | null) {
 
 let askLevel: HelpLevel = 'nudge'
 let askSending = false
+/** While an Ask stages its picture in the model context, the notebook's own context updates must not replace it. */
+let sendingAsk = false
 
 /** In the desktop preview nothing is sent; the message is kept here so it can be inspected. */
 const askLog: Array<{ role: string; content: Array<{ type: string; text?: string; mimeType?: string; bytes?: number }> }> = []
@@ -905,18 +909,30 @@ async function sendAsk(question: string, scope: AskScope, say: (text: string, to
     say('Preview: logged in window.novaAskLog; nothing was sent to Claude.', 'ok')
     return true
   }
-  const accepts = app.getHostCapabilities()?.message
-  if (!accepts || (Object.keys(accepts).length > 0 && !accepts.image)) {
-    say('Not sent: this Claude app does not accept pictures from the notebook.', 'bad')
+  const caps = app.getHostCapabilities()
+  const delivery = askDelivery(caps)
+  if (!delivery) {
+    const kinds = Object.keys(caps?.message ?? {}).join(', ') || 'nothing'
+    say(`Not sent: this Claude app does not accept pictures from the notebook (it accepts ${kinds}).`, 'bad')
     return false
   }
-  say('Sending to Claude…')
+  say('Sending to NOVA…')
   try {
-    const answer = await app.sendMessage(message)
-    if (answer.isError) throw new Error('Claude did not accept the message')
+    sendingAsk = true
+    if (delivery === 'context') {
+      const [text, image] = message.content
+      await app.updateModelContext({ content: [image] })
+      const answer = await app.sendMessage({ role: 'user', content: [{ type: 'text', text: `${text.type === 'text' ? text.text : ''}\nThe picture is attached to this conversation's notebook context.` }] })
+      if (answer.isError) throw new Error('Claude did not accept the message')
+    } else {
+      const answer = await app.sendMessage(message)
+      if (answer.isError) throw new Error('Claude did not accept the message')
+    }
   } catch (error) {
     say(`Not sent: ${error instanceof Error ? error.message : String(error)}`, 'bad')
     return false
+  } finally {
+    sendingAsk = false
   }
   say('Sent. The answer will appear in the chat.', 'ok')
   return true
@@ -1080,6 +1096,42 @@ document.addEventListener('pointerdown', e => {
 })
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else { openMenu(false); closePanels() } } })
 
+// ---- Claude's context: where the student is ----
+
+let sharedContext = ''
+let contextTimer: ReturnType<typeof setTimeout> | null = null
+
+function currentView(): NotebookView {
+  const state = session.getState()
+  const notebook = state.notebooks.find(n => n.id === state.notebookId)
+  const live = livePages(state)
+  const page = session.currentPage
+  return {
+    notebook: notebook ? { id: notebook.id, name: notebook.name } : null,
+    page: page && $('library').hidden ? { id: page.id, title: page.title, number: Math.max(1, live.findIndex(p => p.id === page.id) + 1), of: live.length } : null,
+    paper: surface.paper, zoom: surface.camera.z,
+    onScreen: (({ strokes, images }) => ({ strokes, pictures: images }))(surface.viewCounts()),
+    selected: (({ strokes, images }) => ({ strokes, pictures: images }))(surface.selectionCounts()),
+    status: LABELS[state.status],
+  }
+}
+
+/** Keeps Claude's view of the notebook current, at most every 1.5 s and only when it changed. Never sends a message. */
+function shareContext() {
+  if (!app || contextTimer) return
+  contextTimer = setTimeout(() => {
+    contextTimer = null
+    const accepts = app?.getHostCapabilities()?.updateModelContext
+    if (!app || !accepts || sendingAsk || session.getState().status === 'loading') return
+    const text = notebookContext(currentView())
+    if (text === sharedContext) return
+    sharedContext = text
+    app.updateModelContext({ content: [{ type: 'text', text }] }).catch(() => { sharedContext = '' })
+  }, 1500)
+}
+surface.onChange(shareContext)
+setInterval(shareContext, 5000)
+
 // ---- Lifecycle ----
 
 let rendered: SessionState | null = null
@@ -1091,6 +1143,7 @@ function render() {
   rememberPage(state)
   if (rendered?.revision !== state.revision || rendered?.editable !== state.editable) renderMenu()
   rendered = state
+  shareContext()
 }
 session.subscribe(render)
 

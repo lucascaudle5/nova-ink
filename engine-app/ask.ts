@@ -118,6 +118,21 @@ export function askMessage(input: AskInput, pngBase64: string): AskMessage {
   return { role: 'user', content: [{ type: 'text', text: askText(input) }, { type: 'image', data: pngBase64, mimeType: 'image/png' }] }
 }
 
+/** Content kinds a host says it accepts, as in the MCP Apps host capabilities (`message`, `updateModelContext`). */
+export type Modalities = object | undefined
+
+/**
+ * How the picture can reach the model: inside the message, staged in the model context with the message carrying
+ * only text, or not at all. A host that declares a channel without listing kinds is taken to accept pictures.
+ */
+export function askDelivery(caps: { message?: Modalities; updateModelContext?: Modalities } | undefined): 'message' | 'context' | null {
+  const accepts = (m: Modalities) => !!m && (Object.keys(m).length === 0 || 'image' in m)
+  if (!caps?.message) return null
+  if (accepts(caps.message)) return 'message'
+  if (accepts(caps.updateModelContext)) return 'context'
+  return null
+}
+
 /** Base64 of a blob without building one huge string of characters in a single call. */
 export async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
