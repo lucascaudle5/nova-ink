@@ -143,6 +143,34 @@ describe('NOVA reads and edits a page through the model tools', () => {
     expect(opened.page.revision).toBeGreaterThanOrEqual(2)
   })
 
+  it('a preview shows where labels would land without drawing anything, and the real drawing lands there', async () => {
+    const token = (await signIn())!
+    const { pageId, client } = await pageWithInk(token)
+    const operations = [{ op: 'draw', name: 'Force', place: { relativeTo: 'ink:work1', side: 'right', gap: 60 }, shapes: [
+      { type: 'arrow', x1: 0, y1: 20, x2: 120, y2: 20 }, { type: 'text', x: 128, y: 12, text: 'T' },
+    ] }]
+    const requestId = rid()
+    const { body } = await rpc(token, 'tools/call', { name: 'nova_edit_page', arguments: { pageId, requestId, operations, preview: true } })
+    const text = body.result.content[0].text as string
+    expect(text).toMatch(/^Preview only; nothing is on the page yet\. It would do: Drew "Force" \(2 shapes\) at x/)
+    expect(text).not.toMatch(/nova-force-/)
+    expect(text).toMatch(/Labels would land: "T" at x/)
+    expect(text).toMatch(/```\nArea x[\s\S]*\*+ *T[\s\S]*```\nIf every label sits next to what it names/)
+    const preview = body.result.structuredContent
+    expect(preview).toMatchObject({ ok: true, preview: true, revision: 1 })
+    expect(preview.groups).toBeUndefined()
+    // nothing stored: no request waiting for the editor, no status for the id, still revision 1
+    expect((await tool(token, 'nb_heartbeat', { pageId, clientId: client })).pendingOps).toEqual([])
+    expect(await tool(token, 'nova_read_page', { pageId })).toMatchObject({ revision: 1, pendingRequests: 0, groups: [] })
+    // the same requestId then draws it, exactly where the preview said
+    const drawn = await tool(token, 'nova_edit_page', { pageId, requestId, operations })
+    expect(drawn).toMatchObject({ ok: true, status: 'queued' })
+    expect(drawn.duplicate).toBeUndefined()
+    expect(drawn.labels).toEqual([{ ...preview.labels[0], group: drawn.groups[0].id }])
+    expect(await tool(token, 'nova_edit_page', { pageId, requestId: rid(), operations: [{ op: 'nope' }], preview: true })).toMatchObject({ ok: false, code: 'INVALID_OPS' })
+    expect(await tool(token, 'nova_edit_page', { pageId, requestId: rid(), operations, preview: true, expectedRevision: 9 })).toMatchObject({ ok: false, code: 'STALE_REVISION' })
+  })
+
   it('after a draw, the text says where each label landed and sketches the area; nova_read_page sketches on request', async () => {
     const token = (await signIn())!
     const { pageId } = await pageWithInk(token)

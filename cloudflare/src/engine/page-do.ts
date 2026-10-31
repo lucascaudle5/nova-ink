@@ -514,6 +514,32 @@ export class PageDO extends DurableObject {
     })
   }
 
+  /**
+   * What a batch would do, planned exactly as enqueue would (on top of waiting requests), without storing or applying
+   * anything: the summary, where labels would land and a sketch, so NOVA can correct the batch before the student sees it.
+   */
+  preview(req: { ops: unknown; expectedRevision?: number }): Promise<Result> {
+    return this.serialize(() => {
+      const parsed = parseOps(req?.ops)
+      if (!parsed.ok) return fail('INVALID_OPS', parsed.message)
+      const state = this.readHead()
+      if ('error' in state) return state.error
+      const revision = state.head?.revision ?? 0
+      if (req.expectedRevision !== undefined && req.expectedRevision !== revision) {
+        return fail('STALE_REVISION', `The page changed since you read it (now revision ${revision}). Read it again, then repeat the request.`, { revision })
+      }
+      const read = this.readScene(state.head)
+      if ('error' in read) return read.error
+      const scene = this.withPending(read.scene)
+      const plan = planOps(scene, parsed.ops, { opId: crypto.randomUUID(), now: this.clock() })
+      if (!plan.ok) return fail('INVALID_OPS', plan.message)
+      const drawn = sketchOfPlan(scene, plan)
+      // group ids come from this throwaway plan; the real request makes its own
+      return { ok: true, preview: true, revision, summary: plan.summary.map(s => s.replace(/ as group \S+/g, '')), warnings: plan.warnings,
+        ...(plan.labels?.length ? { labels: plan.labels.map(({ text, bounds }) => ({ text, bounds })) } : {}), ...(drawn ? { sketch: drawn } : {}) }
+    })
+  }
+
   /** Where requests stand. Anything waiting is applied now if nobody is editing. */
   opStatus(req: { requestIds?: string[] }): Promise<Result> {
     return this.serialize(async () => {

@@ -27,7 +27,8 @@ export const MAX_VIEW_BASE64 = 1_500_000
 export const INSTRUCTIONS = `NOVA Ink is the student's handwriting notebook. Talk about their work, not about the notebook.
 - To see their work and which page they are on, call nova_look; never ask them which page they are on.
 - The notebook saves, syncs and applies your drawings by itself. Do not mention saving, syncing, updating, revisions, request ids, queues, jobs or how long anything takes, and do not narrate your tool calls. Only bring it up if something failed and the student has to do something about it.
-- Keep answers short and conversational, especially in voice. Answer what the student asks; do not offer hints or draw on the page unless they ask.`
+- Keep answers short and conversational, especially in voice. Answer what the student asks; do not offer hints or draw on the page unless they ask.
+- Before drawing anything with labels, preview it (nova_edit_page with preview: true), check where each label would land, fix it, then draw. Do not talk about the preview.`
 const SEEN: Record<string, string> = {
   screen: 'exactly what is on the student\'s screen',
   area: 'the area of the page the student snipped to show you',
@@ -70,12 +71,14 @@ function result(data: Data, say?: (data: Data) => string, picture?: Picture) {
 type Placed = { text: string; bounds: { minX: number; minY: number; maxX: number; maxY: number } }
 
 /** Where NOVA's labels landed and a character sketch of the area, so a model without images can check its placement. */
-function seeIt(d: Data): string {
+function seeIt(d: Data, previewing?: string): string {
   const labels = (d.labels as Placed[] | undefined) ?? []
   const where = labels.map(l => `"${l.text}" at x ${Math.round(l.bounds.minX)}-${Math.round(l.bounds.maxX)}, y ${Math.round(l.bounds.minY)}-${Math.round(l.bounds.maxY)}`)
   const parts = [
-    where.length ? `\nLabels landed: ${where.join('; ')}.` : '',
-    typeof d.sketch === 'string' ? `\nRough sketch of the page around this change (check that labels sit next to what they name; if not, move them with another nova_edit_page):\n\`\`\`\n${d.sketch}\n\`\`\`` : '',
+    where.length ? `\n${previewing ? 'Labels would land' : 'Labels landed'}: ${where.join('; ')}.` : '',
+    typeof d.sketch === 'string' ? (previewing
+      ? `\nRough sketch of the page with ${previewing}:\n\`\`\`\n${d.sketch}\n\`\`\``
+      : `\nRough sketch of the page around this change (check that labels sit next to what they name; if not, move them with another nova_edit_page):\n\`\`\`\n${d.sketch}\n\`\`\``) : '',
   ]
   return parts.join('')
 }
@@ -419,12 +422,17 @@ Coordinates are page units; x grows right, y grows down. Prefer "place": { relat
 Operations (each an object with "op"):
 - draw { name?, place, shapes: [...] } shapes are drawn in a local frame starting near (0,0) and moved to "place": line {x1,y1,x2,y2,dashed?}, arrow {x1,y1,x2,y2,both?}, polyline {points:[[x,y],...],closed?}, rect {x,y,w,h}, ellipse {cx,cy,rx,ry}, arc {cx,cy,r,from,to,arrow?} (degrees), text {x,y,text,size?}, equation {x,y,text,size?} (math: ^ _ {} \\frac{a}{b} \\sqrt{x} \\Sigma \\theta ... and \\\\ for a new line). Optional color (#rrggbb), width, dashed on shapes. Use real geometry: free-body diagrams are arrows from the body outward with text labels, equations go beneath.
 - move { targets, dx?, dy? | place }, make_room { below: ref, amount }, align { targets, edge: left|right|top|bottom|centerX|centerY }, distribute { targets, axis: x|y, gap? }, group { targets, name? }, ungroup { targets }, duplicate { targets, place }, remove { targets } (only NOVA's own marks), picture { image, w, h, name?, place } (a stored picture id).
-Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests, where each text label landed, and a rough character sketch of the area: check it, and fix labels that ended up away from what they name. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Do not tell the student about this status; use nova_op_status only if they say something is missing.`, z.object({
+Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests, where each text label landed, and a rough character sketch of the area. For a drawing with text or equation labels, first send it with preview: true: nothing is drawn or stored, and the result shows where each label would land and a sketch. Check that every label sits next to what it names, adjust, then send the final operations without preview (the same requestId is fine), so the student only sees the corrected drawing. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Do not tell the student about this status; use nova_op_status only if they say something is missing.`, z.object({
       pageId: uuid, requestId, expectedRevision: z.number().int().nonnegative().optional(),
       operations: z.array(z.record(z.string(), z.unknown())).min(1).max(40),
+      preview: z.boolean().optional(),
     }), 'mcp:write', async a => {
       const own = await owned(a.pageId, true)
       if ('error' in own) return own.error
+      if (a.preview) {
+        const planned = await page(a.pageId).preview({ ops: a.operations, expectedRevision: a.expectedRevision }) as Data
+        return planned.ok ? { ...planned, note: 'Nothing was drawn. Group ids are given when the drawing is made.' } : planned
+      }
       const queued = await page(a.pageId).enqueue({ requestId: a.requestId, ops: a.operations, expectedRevision: a.expectedRevision }) as Data
       if (queued.ok && queued.advanced) await touch(a.pageId, queued.advanced.revision, queued.advanced.savedAt, true)
       if (!queued.ok) return queued
@@ -432,7 +440,9 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
       return { ...rest, note: queued.status === 'saved' ? 'Saved on the server.' : queued.editorOpen
         ? 'The notebook shows this within seconds and saves it by itself; no need to check or mention it.'
         : 'Waiting for the notebook; it will be applied when the notebook next opens.' }
-    }, d => `${d.status === 'saved' || d.editorOpen ? 'Done' : 'Will appear when the notebook next opens'}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : '.'}${seeIt(d)}`)
+    }, d => d.preview
+      ? `Preview only; nothing is on the page yet. It would do: ${((d.summary as string[] | undefined) ?? []).join(' ')}${seeIt(d, 'this drawing')}\nIf every label sits next to what it names, send the same operations again without preview. If not, change those labels' x and y and preview again.`
+      : `${d.status === 'saved' || d.editorOpen ? 'Done' : 'Will appear when the notebook next opens'}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : '.'}${seeIt(d)}`)
 
   modelTool('nova_op_status', 'Check NOVA Ink requests', 'Where your earlier requests stand: queued (accepted, waiting for the open notebook), applied (shown in the notebook, not yet saved), saved (stored on the server), or failed (with the reason). Pass pageId with requestIds for page edits, jobIds for source placements. A request left waiting while the notebook is closed is applied by this call.',
     z.object({ pageId: uuid.optional(), requestIds: z.array(requestId).max(50).optional(), jobIds: z.array(uuid).max(20).optional() }), 'mcp:read', async a => {
