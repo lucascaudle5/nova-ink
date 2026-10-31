@@ -6,7 +6,7 @@
  * widget-only, and none lets the model draw on a page.
  */
 import { McpServer } from '@modelcontextprotocol/server'
-import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
+import { EXTENSION_ID, registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { z } from 'zod'
 import { isPaper } from '../../../engine/src/core/paper'
 import { cropOk, MARGIN, MAX_ITEMS, parsePageList, pictureOp, stackOps } from './layout'
@@ -47,7 +47,8 @@ const lastTouch = new Map<string, number>()
 
 export function createEngineServer(ctx: ServerContext): McpServer {
   const env = ctx.env as EngineEnv
-  const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION })
+  // Hosts on the server/discover handshake (Claude) render the notebook only when the server declares MCP Apps here.
+  const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION }, { capabilities: { extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } } } })
   const assetOrigin = (() => { try { return new URL(String(env.PUBLIC_ORIGIN)).origin } catch { return '' } })()
   const library = () => env.ENGINE_LIBRARY.get(env.ENGINE_LIBRARY.idFromName(`engine-library:${ctx.userId}`)) as any
   const page = (id: string) => env.PAGE.get(env.PAGE.idFromName(`page:${id}`)) as any

@@ -99,10 +99,10 @@ export async function signIn(opts: { email?: string; scopes?: string[] } = {}): 
 }
 
 let rpcId = 0
-export async function rpc(token: string | null, method: string, params?: unknown) {
+export async function rpc(token: string | null, method: string, params?: unknown, protocol = '2025-06-18') {
   const response = await call('/mcp', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': protocol, ...(protocol >= '2026' ? { 'mcp-method': method } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
   })
   const raw = await response.text()
