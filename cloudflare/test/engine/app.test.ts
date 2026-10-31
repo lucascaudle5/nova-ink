@@ -58,17 +58,19 @@ describe('engine tools', () => {
     expect(Object.keys(content._meta)).toEqual(['ui'])
   })
 
-  it('declares MCP Apps in server/discover, as Claude negotiates it', async () => {
+  it('serves only the 2025 protocol: a server/discover probe is refused so the client falls back to initialize', async () => {
     const token = (await signIn())!
     const meta = {
       'io.modelcontextprotocol/protocolVersion': '2026-07-28',
       'io.modelcontextprotocol/clientCapabilities': { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } },
     }
-    const { body } = await rpc(token, 'server/discover', { _meta: meta }, '2026-07-28')
-    expect(body.error, JSON.stringify(body)).toBeUndefined()
-    expect(body.result.capabilities.extensions['io.modelcontextprotocol/ui']).toEqual({ mimeTypes: ['text/html;profile=mcp-app'] })
-    const listed = await rpc(token, 'tools/list', { _meta: meta }, '2026-07-28')
-    expect(listed.body.result.tools.find((t: any) => t.name === 'open_nova_notebook')._meta.ui.resourceUri).toBe('ui://nova-ink-engine/notebook')
+    const probe = await rpc(token, 'server/discover', { _meta: meta }, '2026-07-28')
+    expect(probe.body?.result, JSON.stringify(probe.body)).toBeUndefined()
+    const init = await rpc(token, 'initialize', {
+      protocolVersion: '2025-11-25', clientInfo: { name: 'test', version: '1' },
+      capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } },
+    }, '2025-11-25')
+    expect(init.body.result.protocolVersion, JSON.stringify(init.body)).toBe('2025-11-25')
   })
 
   it('serves pdf.js (public library code) for PDF import without sign-in, and nothing else under /assets/pdfjs/', async () => {

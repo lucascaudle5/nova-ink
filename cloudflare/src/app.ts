@@ -12,7 +12,7 @@ import {
   AuthorizationError, CimdFetchError, OAuthProvider, authorizationErrorRedirect, insufficientScope,
   type ConsentDescription, type OAuthResourceAuth,
 } from '@cloudflare/workers-oauth-provider'
-import { createMcpHandler, type McpServer } from '@modelcontextprotocol/server'
+import { legacyStatelessFallback, type McpServer } from '@modelcontextprotocol/server'
 import { AccessError, accessAuthorizeUrl, exchangeAndVerify, randomToken, userIdFor, type FetchLike } from './access'
 import { readConfig, type AppConfig, type BaseEnv } from './config'
 
@@ -164,11 +164,14 @@ export function createApp(given: AppDeps | undefined, options: AppOptions) {
     const userId = props.userId
     const scopes = [...auth.scope]
     if (request.method === 'POST') ctx.waitUntil(logRpc(request.clone()))
-    const handler = createMcpHandler(
+    // 2025-era protocol only: on the 2026 server/discover path Claude lists and calls the tools but never loads the
+    // notebook (seen October 30, 2026). A discover probe gets "method not found", and Claude falls back to initialize.
+    const handler = legacyStatelessFallback(
       () => options.createServer({ env, userId, scopes, waitUntil: p => ctx.waitUntil(p), bytesIn: Number.isFinite(length) && length > 0 ? length : null }),
+      undefined,
       { maxRequestBodySize: MAX_MCP_BODY_BYTES },
     )
-    return handler.fetch(request, { authInfo: { token: '', clientId: auth.clientId ?? '', scopes, ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}) } })
+    return handler(request, { authInfo: { token: '', clientId: auth.clientId ?? '', scopes, ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}) } })
   }
 
   /** One line per JSON-RPC message: method, tool name or resource URI, and on initialize the client and its extensions. Never arguments. */
