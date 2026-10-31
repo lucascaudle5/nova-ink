@@ -45,6 +45,7 @@ describe('the picture the student shows Claude', () => {
     expect(await tool(token, 'nb_put_view', { pageId, clientId: client, view: { seen: 'screen', mime: 'image/png', data, width: 1180, height: 820 } })).toMatchObject({ ok: true })
     result = await call()
     expect(result.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
+    expect(result.content[2]).toEqual({ type: 'resource', resource: { uri: `nova-ink://pages/${pageId}/view.png`, mimeType: 'image/png', blob: data } })
     expect(result.content[0].text.split('\n')[0]).toMatch(/The attached image is exactly what is on the student's screen, taken \d+ s ago\.$/)
     // with an image there is no structuredContent a host could show the model instead; the text carries the data
     expect(result.structuredContent).toBeUndefined()
@@ -55,6 +56,7 @@ describe('the picture the student shows Claude', () => {
     // nova_look: just the picture, for the page open in the notebook when no pageId is given
     const look = (await rpc(token, 'tools/call', { name: 'nova_look', arguments: {} })).body.result
     expect(look.structuredContent).toBeUndefined()
+    expect(look.content.map((c: any) => c.type)).toEqual(['text', 'image', 'resource'])
     expect(look.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
     expect(look.content[0].text).toMatch(/^The student is on page 1 of 1, "Page 1", in notebook "Statics review \(test\)"\. The attached image is exactly what is on the student's screen, taken \d+ s ago\./)
 

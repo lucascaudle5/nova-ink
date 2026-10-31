@@ -45,12 +45,14 @@ const camera = z.object({ x: z.number(), y: z.number(), z: z.number() })
 const color = z.string().regex(/^#[0-9a-f]{6}$/)
 const stroke = z.record(z.string(), z.unknown())
 
-type Picture = { data: string; mimeType: string }
+type Picture = { data: string; mimeType: string; uri: string }
+type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string } | { type: 'resource'; resource: { uri: string; mimeType: string; blob: string } }
 
 function result(data: Data, say?: (data: Data) => string, picture?: Picture) {
   const text = data.ok ? (say ? say(data) : 'NOVA Ink notebook operation completed.') : `NOVA Ink notebook error: ${String(data.message ?? data.code)}`
-  const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text }]
-  if (data.ok && picture) content.push({ type: 'image', ...picture })
+  const content: Content[] = [{ type: 'text', text }]
+  // The same picture twice: as image content, and as an embedded resource for hosts that pass only that through.
+  if (data.ok && picture) content.push({ type: 'image', data: picture.data, mimeType: picture.mimeType }, { type: 'resource', resource: { uri: picture.uri, mimeType: picture.mimeType, blob: picture.data } })
   // A host may hand the model structuredContent in place of content, which would drop the image; the text has the data.
   if (data.ok && picture) return { content }
   return { structuredContent: data as Record<string, unknown>, content }
@@ -330,7 +332,7 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     if (!shown) return null
     return {
       view: { shows: SEEN[shown.seen] ?? shown.seen, width: shown.width, height: shown.height, takenAt: shown.at, ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(shown.at)) / 1000)) },
-      picture: { data: shown.data, mimeType: shown.mime },
+      picture: { data: shown.data, mimeType: shown.mime, uri: `nova-ink://pages/${pageId}/view.${shown.mime === 'image/jpeg' ? 'jpg' : 'png'}` },
     }
   }
 
