@@ -163,11 +163,29 @@ export function createApp(given: AppDeps | undefined, options: AppOptions) {
     const length = Number(request.headers.get('content-length'))
     const userId = props.userId
     const scopes = [...auth.scope]
+    if (request.method === 'POST') ctx.waitUntil(logRpc(request.clone()))
     const handler = createMcpHandler(
       () => options.createServer({ env, userId, scopes, waitUntil: p => ctx.waitUntil(p), bytesIn: Number.isFinite(length) && length > 0 ? length : null }),
       { maxRequestBodySize: MAX_MCP_BODY_BYTES },
     )
     return handler.fetch(request, { authInfo: { token: '', clientId: auth.clientId ?? '', scopes, ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}) } })
+  }
+
+  /** One line per JSON-RPC message: method, tool name or resource URI, and on initialize the client and its extensions. Never arguments. */
+  async function logRpc(request: Request) {
+    try {
+      const body = await request.json() as unknown
+      for (const m of (Array.isArray(body) ? body : [body]) as Array<{ method?: unknown; params?: any }>) {
+        if (typeof m?.method !== 'string') continue
+        const p = m.params ?? {}
+        console.log(JSON.stringify({
+          evt: 'rpc', method: m.method,
+          ...(typeof p.name === 'string' ? { name: p.name } : {}),
+          ...(typeof p.uri === 'string' ? { uri: p.uri } : {}),
+          ...(m.method === 'initialize' ? { client: p.clientInfo, protocol: p.protocolVersion, extensions: p.capabilities?.extensions ?? null } : {}),
+        }))
+      }
+    } catch { /* not JSON; the MCP handler reports it */ }
   }
 
   function providerFor(config: AppConfig): OAuthProvider<Env> {
