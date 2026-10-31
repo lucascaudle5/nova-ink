@@ -67,6 +67,19 @@ function result(data: Data, say?: (data: Data) => string, picture?: Picture) {
   return { structuredContent: data as Record<string, unknown>, content }
 }
 
+type Placed = { text: string; bounds: { minX: number; minY: number; maxX: number; maxY: number } }
+
+/** Where NOVA's labels landed and a character sketch of the area, so a model without images can check its placement. */
+function seeIt(d: Data): string {
+  const labels = (d.labels as Placed[] | undefined) ?? []
+  const where = labels.map(l => `"${l.text}" at x ${Math.round(l.bounds.minX)}-${Math.round(l.bounds.maxX)}, y ${Math.round(l.bounds.minY)}-${Math.round(l.bounds.maxY)}`)
+  const parts = [
+    where.length ? `\nLabels landed: ${where.join('; ')}.` : '',
+    typeof d.sketch === 'string' ? `\nRough sketch of the page around this change (check that labels sit next to what they name; if not, move them with another nova_edit_page):\n\`\`\`\n${d.sketch}\n\`\`\`` : '',
+  ]
+  return parts.join('')
+}
+
 const lastTouch = new Map<string, number>()
 
 export function createEngineServer(ctx: ServerContext): McpServer {
@@ -306,7 +319,7 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     registerAppTool(server, toolName, {
       title, description, inputSchema: schema, _meta: {},
       annotations: { readOnlyHint: scope === 'mcp:read', destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, ((args: z.infer<S>) => run(toolName, scope, () => body(args), d => `${say ? say(d) : 'Done.'}\n${JSON.stringify(d)}`)) as any)
+    }, ((args: z.infer<S>) => run(toolName, scope, () => body(args), d => `${say ? say(d) : 'Done.'}\n${JSON.stringify(d, (k, v) => k === 'sketch' ? undefined : v)}`)) as any)
   const live = async (): Promise<Array<{ id: string; name: string; folderId: string | null; pages: Array<{ id: string; title: string; revision: number }> }>> => {
     const data = await library().list() as Data
     return (data.notebooks as any[]).filter(n => !n.deletedAt).map(n => ({
@@ -375,8 +388,8 @@ export function createEngineServer(ctx: ServerContext): McpServer {
         : `${head} No transcription is available (${d.transcriptError}); if you cannot see the image, ask the student to read out their work.`
     })
 
-  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. To just look at the work, use nova_look. Also reports whether the notebook is open and how many of your requests are still waiting. pageId is optional; it defaults to the page the student has open, so do not ask them which page they are on.',
-    z.object({ pageId: uuid.optional() }), 'mcp:read', async args => {
+  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. To just look at the work, use nova_look. Also reports whether the notebook is open and how many of your requests are still waiting. pageId is optional; it defaults to the page the student has open, so do not ask them which page they are on. sketch: true (whole page) or an id, group or "ink:..." ref adds a rough character sketch of that area, useful for planning where to draw when images do not reach you.',
+    z.object({ pageId: uuid.optional(), sketch: z.union([z.boolean(), z.string().min(1).max(200)]).optional() }), 'mcp:read', async args => {
       const pageId = args.pageId ?? await openPageId()
       if (!pageId) return notFound()
       const a = { pageId }
@@ -385,17 +398,20 @@ export function createEngineServer(ctx: ServerContext): McpServer {
       const [scene, shown, where] = await Promise.all([page(a.pageId).scene() as Promise<Data>, storedView(a.pageId), whereIs(a.pageId)])
       if (!scene.ok) return scene
       if (scene.advanced) await touch(a.pageId, scene.advanced.revision, scene.advanced.savedAt, true)
+      const drawn = args.sketch ? await page(a.pageId).sketch({ around: typeof args.sketch === 'string' ? args.sketch : undefined }) as Data : null
+      if (drawn && !drawn.ok) return drawn
       const metas = await library().imageMetas((scene.pictures as any[]).map(p => p.picture)) as Record<string, unknown>
       const { advanced: _advanced, ...rest } = scene
       return {
         ...rest, page: { id: own.meta.id, title: own.meta.title, notebookId: own.meta.notebookId, number: where.pageNumber, of: where.pageCount, notebook: where.notebook }, pictures: (scene.pictures as any[]).map(p => ({ ...p, source: metas[p.picture] ?? null })),
-        view: shown?.view ?? null, ...(shown ? { picture: shown.picture } : {}),
+        view: shown?.view ?? null, ...(shown ? { picture: shown.picture } : {}), ...(drawn?.sketch ? { sketch: drawn.sketch } : {}),
       }
     }, d => {
+      const sketched = typeof d.sketch === 'string' ? `\nRough sketch:\n\`\`\`\n${d.sketch}\n\`\`\`` : ''
       const p = d.page as { number: number | null; of: number | null; title: string; notebook: string | null }
       const counts = `Page ${p.number ?? '?'} of ${p.of ?? '?'}, "${p.title}", in notebook "${p.notebook}", at revision ${d.revision}: ${(d.groups as unknown[]).length} group(s), ${(d.pictures as unknown[]).length} picture(s), ${(d.regions as unknown[]).length} handwriting region(s).`
       const view = d.view as { shows: string; ageSeconds: number } | null
-      return view ? `${counts} The attached image is ${view.shows}, taken ${view.ageSeconds} s ago.` : `${counts} No image: the notebook is closed, paused, or showing an empty screen.`
+      return (view ? `${counts} The attached image is ${view.shows}, taken ${view.ageSeconds} s ago.` : `${counts} No image: the notebook is closed, paused, or showing an empty screen.`) + sketched
     })
 
   modelTool('nova_edit_page', 'Draw on or arrange a NOVA Ink page', `Change one page with a batch of operations (up to 40, applied together or not at all, as ONE undo step for the student). Use it only when the student asked you to draw, label, move or arrange something. It never deletes the student's handwriting. Everything you draw is tagged as NOVA's (author "nova", a boxed N, a purple color) and can be selected, moved, undone and erased like the student's own marks.
@@ -403,7 +419,7 @@ Coordinates are page units; x grows right, y grows down. Prefer "place": { relat
 Operations (each an object with "op"):
 - draw { name?, place, shapes: [...] } shapes are drawn in a local frame starting near (0,0) and moved to "place": line {x1,y1,x2,y2,dashed?}, arrow {x1,y1,x2,y2,both?}, polyline {points:[[x,y],...],closed?}, rect {x,y,w,h}, ellipse {cx,cy,rx,ry}, arc {cx,cy,r,from,to,arrow?} (degrees), text {x,y,text,size?}, equation {x,y,text,size?} (math: ^ _ {} \\frac{a}{b} \\sqrt{x} \\Sigma \\theta ... and \\\\ for a new line). Optional color (#rrggbb), width, dashed on shapes. Use real geometry: free-body diagrams are arrows from the body outward with text labels, equations go beneath.
 - move { targets, dx?, dy? | place }, make_room { below: ref, amount }, align { targets, edge: left|right|top|bottom|centerX|centerY }, distribute { targets, axis: x|y, gap? }, group { targets, name? }, ungroup { targets }, duplicate { targets, place }, remove { targets } (only NOVA's own marks), picture { image, w, h, name?, place } (a stored picture id).
-Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Do not tell the student about this status; use nova_op_status only if they say something is missing.`, z.object({
+Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests, where each text label landed, and a rough character sketch of the area: check it, and fix labels that ended up away from what they name. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Do not tell the student about this status; use nova_op_status only if they say something is missing.`, z.object({
       pageId: uuid, requestId, expectedRevision: z.number().int().nonnegative().optional(),
       operations: z.array(z.record(z.string(), z.unknown())).min(1).max(40),
     }), 'mcp:write', async a => {
@@ -416,7 +432,7 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
       return { ...rest, note: queued.status === 'saved' ? 'Saved on the server.' : queued.editorOpen
         ? 'The notebook shows this within seconds and saves it by itself; no need to check or mention it.'
         : 'Waiting for the notebook; it will be applied when the notebook next opens.' }
-    }, d => `${d.status === 'saved' || d.editorOpen ? 'Done' : 'Will appear when the notebook next opens'}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : '.'}`)
+    }, d => `${d.status === 'saved' || d.editorOpen ? 'Done' : 'Will appear when the notebook next opens'}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : '.'}${seeIt(d)}`)
 
   modelTool('nova_op_status', 'Check NOVA Ink requests', 'Where your earlier requests stand: queued (accepted, waiting for the open notebook), applied (shown in the notebook, not yet saved), saved (stored on the server), or failed (with the reason). Pass pageId with requestIds for page edits, jobIds for source placements. A request left waiting while the notebook is closed is applied by this call.',
     z.object({ pageId: uuid.optional(), requestIds: z.array(requestId).max(50).optional(), jobIds: z.array(uuid).max(20).optional() }), 'mcp:read', async a => {

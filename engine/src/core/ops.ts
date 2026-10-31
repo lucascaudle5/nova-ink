@@ -60,11 +60,14 @@ export interface Plan {
   summary: string[]
   warnings: string[]
   groups: Array<{ id: string; name: string; bounds: Bounds }>
+  /** Where each text or equation NOVA drew ended up, and the strokes that write it. */
+  labels?: PlacedLabel[]
   /** True when nothing would change (including a batch that was already applied). */
   empty: boolean
   alreadyApplied?: boolean
 }
 export type PlanResult = ({ ok: true } & Plan) | { ok: false; message: string; opIndex?: number }
+export interface PlacedLabel { text: string; group: string; bounds: Bounds; strokeIds: string[] }
 
 // ---------------------------------------------------------------- validation
 
@@ -166,6 +169,7 @@ class Planner {
   warnings: string[] = []
   summary: string[] = []
   groups: Plan['groups'] = []
+  labels: PlacedLabel[] = []
   private counter = 0
   private groupCounter = 0
   private opIndex = 0
@@ -230,7 +234,7 @@ class Planner {
     }
     const removes = [...this.removed]
     // The z-order of untouched and replaced items is kept; new items land on top (pictures among pictures).
-    return { adds, removes, replaces, summary: this.summary, warnings: this.warnings, groups: this.groups, empty: !adds.length && !removes.length && !replaces.length }
+    return { adds, removes, replaces, summary: this.summary, warnings: this.warnings, groups: this.groups, labels: this.labels, empty: !adds.length && !removes.length && !replaces.length }
   }
 }
 
@@ -272,11 +276,11 @@ function placeRect(p: Planner, size: { w: number; h: number }, place: Place, exc
 }
 
 function inkLines(shapes: readonly Shape[]) {
-  const lines: Array<{ points: Array<[number, number]>; color?: string; width: number }> = []
-  for (const shape of shapes) {
+  const lines: Array<{ points: Array<[number, number]>; color?: string; width: number; shape: number }> = []
+  shapes.forEach((shape, index) => {
     const base = shape.type === 'text' || shape.type === 'equation' ? Math.max(1.4, (shape.size ?? 18) / 12) : NOVA_WIDTH
-    for (const l of shapeToInk(shape)) lines.push({ points: l.points, color: l.color, width: l.width ?? base })
-  }
+    for (const l of shapeToInk(shape)) lines.push({ points: l.points, color: l.color, width: l.width ?? base, shape: index })
+  })
   return lines
 }
 
@@ -318,7 +322,19 @@ export function planOps(scene: SceneInput, ops: readonly Op[], options: { opId: 
           const group = p.newGroup(op.name ?? 'drawing')
           let k = 0
           const made: Stroke[] = []
-          for (const l of lines) made.push(strokeFrom(l.points.map(([x, y]) => [x + dx, y + dy] as [number, number]), l.color ?? NOVA_COLOR, l.width, p.newId(), group, now))
+          const byShape = new Map<number, Stroke[]>()
+          for (const l of lines) {
+            const s = strokeFrom(l.points.map(([x, y]) => [x + dx, y + dy] as [number, number]), l.color ?? NOVA_COLOR, l.width, p.newId(), group, now)
+            made.push(s)
+            byShape.set(l.shape, [...(byShape.get(l.shape) ?? []), s])
+          }
+          op.shapes.forEach((shape, index) => {
+            const written = byShape.get(index)
+            if ((shape.type === 'text' || shape.type === 'equation') && written?.length) {
+              const b = p.boundsOf(written)
+              p.labels.push({ text: shape.text, group, bounds: { minX: round1(b.minX), minY: round1(b.minY), maxX: round1(b.maxX), maxY: round1(b.maxY) }, strokeIds: written.map(s => s.id) })
+            }
+          })
           for (const poly of badge(spot.x, spot.y - 19)) made.push(strokeFrom(poly, NOVA_COLOR, 1.2, p.newId(), group, now + k++))
           for (const s of made) p.append(s)
           const gb = p.boundsOf(made)

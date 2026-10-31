@@ -143,6 +143,30 @@ describe('NOVA reads and edits a page through the model tools', () => {
     expect(opened.page.revision).toBeGreaterThanOrEqual(2)
   })
 
+  it('after a draw, the text says where each label landed and sketches the area; nova_read_page sketches on request', async () => {
+    const token = (await signIn())!
+    const { pageId } = await pageWithInk(token)
+    const { body } = await rpc(token, 'tools/call', { name: 'nova_edit_page', arguments: { pageId, requestId: rid(), operations: [{ op: 'draw', name: 'Force', place: { relativeTo: 'ink:work1', side: 'right', gap: 60 }, shapes: [
+      { type: 'arrow', x1: 0, y1: 20, x2: 120, y2: 20 }, { type: 'text', x: 128, y: 12, text: 'T' },
+    ] }] } })
+    const text = body.result.content[0].text as string
+    expect(text).toMatch(/^Done: /)
+    expect(text).toMatch(/Labels landed: "T" at x -?\d+--?\d+, y -?\d+--?\d+\./)
+    const drawing = text.slice(text.indexOf('```\n') + 4, text.lastIndexOf('\n```'))
+    expect(drawing).toMatch(/^Area x -?\d+ to \d+, y -?\d+ to \d+/)
+    expect(drawing).toContain('#')
+    expect(drawing).toMatch(/\*+ *T/)
+    // the sketch is in the text once, not repeated inside the JSON
+    expect(text.slice(text.lastIndexOf('\n```') + 4)).not.toContain('Area x')
+    expect(body.result.structuredContent).toMatchObject({ ok: true, labels: [{ text: 'T' }] })
+
+    const read = (await rpc(token, 'tools/call', { name: 'nova_read_page', arguments: { pageId, sketch: 'ink:work1' } })).body.result.content[0].text as string
+    expect(read).toMatch(/\nRough sketch:\n```\nArea x/)
+    expect(read).toContain('+')
+    expect((await rpc(token, 'tools/call', { name: 'nova_read_page', arguments: { pageId } })).body.result.content[0].text).not.toContain('Rough sketch')
+    expect(await tool(token, 'nova_read_page', { pageId, sketch: 'nope' })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+  })
+
   it('refuses what it should: stale revision, unknown ids, deleting the student\'s ink, pages that are not this user\'s, a read-only token', async () => {
     const token = (await signIn())!
     const { pageId, client } = await pageWithInk(token)

@@ -15,7 +15,8 @@ import { MAX_ZOOM, MIN_ZOOM } from '../../../engine/src/core/camera'
 import { parseItem, serializeImage, serializeItem, STROKE_ID } from '../../../engine/src/core/format'
 import { applyPlanToScene, parseOps, planOps } from '../../../engine/src/core/ops'
 import type { Op } from '../../../engine/src/core/ops'
-import { describeScene } from '../../../engine/src/core/scene'
+import { describeScene, unionOf } from '../../../engine/src/core/scene'
+import { sketch, sketchArea, sketchOfPlan } from '../../../engine/src/core/sketch'
 import type { SceneInput } from '../../../engine/src/core/scene'
 import { isImage } from '../../../engine/src/core/types'
 import { isOrderKey, keyBetween } from '../../../engine/src/core/order'
@@ -496,14 +497,11 @@ export class PageDO extends DurableObject {
       const read = this.readScene(state.head)
       if ('error' in read) return read.error
       // Plan on top of what is already waiting, so a follow-up can refer to what an earlier request will create.
-      let scene: SceneInput = read.scene
-      for (const q of this.run<OpRow>("SELECT * FROM ops WHERE status IN ('queued', 'applied') ORDER BY created_at, request_id")) {
-        const p = planOps(scene, JSON.parse(q.ops) as Op[], { opId: q.op_id, now: this.clock() })
-        if (p.ok) scene = applyPlanToScene(scene, p)
-      }
+      const scene = this.withPending(read.scene)
       const opId = crypto.randomUUID()
       const plan = planOps(scene, parsed.ops, { opId, now: this.clock() })
       if (!plan.ok) return fail('INVALID_OPS', plan.message)
+      const drawn = sketchOfPlan(scene, plan)
       const at = this.iso()
       this.run('INSERT INTO ops (request_id, op_id, ops, status, created_at, applied_at, saved_at, revision, result) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?)',
         req.requestId, opId, JSON.stringify(parsed.ops), 'queued', at, JSON.stringify({ summary: plan.summary, warnings: plan.warnings, groups: plan.groups }))
@@ -511,7 +509,8 @@ export class PageDO extends DurableObject {
       const row = this.run<OpRow>('SELECT * FROM ops WHERE request_id = ?', req.requestId)[0]
       const old = this.run<{ request_id: string }>("SELECT request_id FROM ops WHERE status IN ('saved', 'failed') ORDER BY created_at DESC LIMIT -1 OFFSET ?", MAX_KEPT_OPS)
       for (const o of old) this.run('DELETE FROM ops WHERE request_id = ?', o.request_id)
-      return { ok: true, ...this.opView(row), editorOpen: this.liveEditor(), advanced }
+      return { ok: true, ...this.opView(row), editorOpen: this.liveEditor(), advanced,
+        ...(plan.labels?.length ? { labels: plan.labels.map(({ text, group, bounds }) => ({ text, group, bounds })) } : {}), ...(drawn ? { sketch: drawn } : {}) }
     })
   }
 
@@ -542,6 +541,38 @@ export class PageDO extends DurableObject {
         else this.settle(r.requestId, 'saved', { ...JSON.parse(row.result || '{}'), via: 'editor', note: 'Already on the page.' }, revision)
       }
       return { ok: true }
+    })
+  }
+
+  /** The page with every request still waiting for the editor planned on top, as it will look once they are applied. */
+  private withPending(scene: SceneInput): SceneInput {
+    for (const q of this.run<OpRow>("SELECT * FROM ops WHERE status IN ('queued', 'applied') ORDER BY created_at, request_id")) {
+      const p = planOps(scene, JSON.parse(q.ops) as Op[], { opId: q.op_id, now: this.clock() })
+      if (p.ok) scene = applyPlanToScene(scene, p)
+    }
+    return scene
+  }
+
+  /**
+   * A character sketch of the page (with waiting requests applied) around one item, group or "ink:" region, or of
+   * everything on it, for a model that cannot see images.
+   */
+  sketch(req: { around?: string }): Promise<Result> {
+    return this.serialize(() => {
+      const state = this.readHead()
+      if ('error' in state) return state.error
+      const read = this.readScene(state.head)
+      if ('error' in read) return read.error
+      const scene = this.withPending(read.scene)
+      const items = [...scene.strokes, ...scene.images]
+      const summary = describeScene(scene)
+      const around = req?.around
+      const focus = !around ? unionOf(items.map(i => i.bounds))
+        : summary.groups.find(g => g.id === around)?.bounds ?? summary.regions.find(r => r.ref === around)?.bounds
+          ?? items.find(i => i.id === around)?.bounds ?? null
+      if (around && !focus) return fail('NOT_FOUND', `Nothing called "${around}" is on this page.`)
+      if (!focus) return { ok: true, sketch: null }
+      return { ok: true, sketch: sketch(scene, sketchArea(focus)) }
     })
   }
 
