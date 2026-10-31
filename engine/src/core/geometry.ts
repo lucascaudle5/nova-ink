@@ -43,19 +43,24 @@ export interface OutlineOptions {
 }
 
 /**
- * Filled outline polygon (flat [x0, y0, x1, y1, ...]) for a constant-width stroke. Pressure is
- * recorded with each point but deliberately ignored here: the user chose fixed widths over pressure.
- * Live and committed strokes use this same function, so a stroke does not change shape on pen-up.
+ * The smoothed centre line of a stroke (flat [x0, y0, x1, y1, ...]): low-pass filtered, close points merged, ending
+ * at the real lift-off point. Ink is drawn along it at the stroke's width with round joins and caps, which never
+ * leaves gaps where the pen turns more tightly than the width. Live and committed strokes use this same line, so a
+ * stroke does not change shape on pen-up.
  */
-export function strokeOutline(points: ArrayLike<number>, width: number, options: OutlineOptions = {}): number[] {
+export function strokeCenterline(points: ArrayLike<number>, options: OutlineOptions = {}): number[] {
+  const { cx, cy } = centerline(points, options)
+  const out: number[] = []
+  for (let i = 0; i < cx.length; i++) out.push(cx[i], cy[i])
+  return out
+}
+
+function centerline(points: ArrayLike<number>, options: OutlineOptions): { cx: number[]; cy: number[] } {
   const smoothing = clamp(options.smoothing ?? 0.45, 0, 0.95)
   const minSpacing = options.minSpacing ?? 0.35
-  const capSegments = Math.max(2, options.capSegments ?? 8)
   const n = pointCount(points)
-  if (n === 0) return []
-
-  const r = width / 2
   const cx: number[] = [], cy: number[] = []
+  if (n === 0) return { cx, cy }
   let sx = points[0], sy = points[1]
   cx.push(sx); cy.push(sy)
   const follow = 1 - smoothing
@@ -71,8 +76,20 @@ export function strokeOutline(points: ArrayLike<number>, width: number, options:
   const lx = points[(n - 1) * POINT_STRIDE], ly = points[(n - 1) * POINT_STRIDE + 1]
   const lastIndex = cx.length - 1
   if (n > 1 && Math.hypot(lx - cx[lastIndex], ly - cy[lastIndex]) >= minSpacing) { cx.push(lx); cy.push(ly) }
+  return { cx, cy }
+}
 
+/**
+ * Filled outline polygon (flat [x0, y0, x1, y1, ...]) for a constant-width stroke, around the same centre line.
+ * Pressure is recorded with each point but deliberately ignored here: the user chose fixed widths over pressure.
+ * At turns tighter than the width the inner edge folds over itself, so this is for dots and geometry, not for filling ink.
+ */
+export function strokeOutline(points: ArrayLike<number>, width: number, options: OutlineOptions = {}): number[] {
+  const capSegments = Math.max(2, options.capSegments ?? 8)
+  const { cx, cy } = centerline(points, options)
+  const r = width / 2
   const m = cx.length
+  if (m === 0) return []
   if (m === 1) return circle(cx[0], cy[0], r, capSegments * 2)
 
   const nx = new Array<number>(m), ny = new Array<number>(m)

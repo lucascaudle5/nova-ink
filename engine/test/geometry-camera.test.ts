@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { strokeOutline, pointBounds } from '../src/core/geometry'
+import { strokeCenterline, strokeOutline, pointBounds } from '../src/core/geometry'
 import { fitBounds, gestureCamera, MAX_ZOOM, MIN_ZOOM, toPage, toScreen, viewportBounds, zoomAt } from '../src/core/camera'
 import { createStroke } from '../src/core/stroke'
 
@@ -41,6 +41,14 @@ test('the outline reaches the real lift-off point despite smoothing lag', () => 
   const outline = strokeOutline(raw, 2, { smoothing: 0.8 })
   const maxX = Math.max(...outline.filter((_, i) => i % 2 === 0))
   assert.ok(maxX >= 87 - 1e-6, `maxX ${maxX}`)
+})
+
+test('the centre line is smoothed, ends at the lift-off point, and a lone point stays one point', () => {
+  assert.deepEqual(strokeCenterline(pts([10, 20])), [10, 20])
+  const raw = pts(...Array.from({ length: 30 }, (_, i): [number, number] => [i * 3, i % 2]))
+  const line = strokeCenterline(raw)
+  assert.deepEqual(line.slice(-2), [87, 1])
+  for (let i = 3; i < line.length - 2; i += 2) assert.ok(line[i] > 0.05 && line[i] < 0.95, 'jitter is smoothed out')
 })
 
 test('screen/page transforms round-trip, including far from the origin', () => {

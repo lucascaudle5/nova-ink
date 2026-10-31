@@ -1,4 +1,4 @@
-import { strokeOutline } from '../core/geometry'
+import { strokeCenterline, strokeOutline } from '../core/geometry'
 import type { OutlineOptions } from '../core/geometry'
 import { DEFAULT_PAPER, displayColor, PAPER_COLORS, patternLayers } from '../core/paper'
 import type { Paper } from '../core/paper'
@@ -19,12 +19,16 @@ export interface Context2D {
   closePath(): void
   setLineDash(segments: number[]): void
   arc(x: number, y: number, radius: number, start: number, end: number): void
-  stroke(): void
+  stroke(path?: never): void
   fillStyle: unknown
   strokeStyle: unknown
   lineWidth: number
+  lineCap: CanvasLineCap
+  lineJoin: CanvasLineJoin
   globalAlpha: number
 }
+
+interface Ink { path: unknown; line: boolean }
 
 export interface CanvasLike {
   width: number
@@ -36,8 +40,8 @@ export interface CanvasLike {
 export interface RendererLayers { paper: CanvasLike; base: CanvasLike; live: CanvasLike; snapshot: CanvasLike }
 
 export interface RendererOptions {
-  /** Builds a fillable path from a flat outline polygon. In browsers: Path2D. */
-  createPath: (outline: number[]) => unknown
+  /** Builds a path from flat points: a closed polygon, or an open line when `closed` is false. In browsers: Path2D. */
+  createPath: (points: number[], closed?: boolean) => unknown
   outline?: OutlineOptions
   /** The decoded picture for an image placement (ImageBitmap, canvas, ...), or null while it is not available. */
   imageSource?: (image: string) => unknown
@@ -58,7 +62,7 @@ export interface ScenePreview { strokeIds: ReadonlySet<string>; transform: Simil
  */
 export class CanvasRenderer {
   private readonly ctx: Record<keyof RendererLayers, Context2D>
-  private readonly paths = new WeakMap<Stroke, unknown>()
+  private readonly paths = new WeakMap<Stroke, Ink>()
   private readonly colors = new Map<string, string>()
   private dpr = 1
   private widthCss = 0
@@ -280,8 +284,7 @@ export class CanvasRenderer {
     this.clear(live)
     if (points.length === 0) return
     this.applyCamera(live, camera)
-    live.fillStyle = this.inkColor(style.color)
-    live.fill(this.options.createPath(strokeOutline(points, style.width, this.options.outline)) as never)
+    this.paintInk(live, this.buildInk(points, style.width), style)
   }
 
   /** Eraser outline at a screen position (CSS pixels), on the live layer. */
@@ -309,14 +312,30 @@ export class CanvasRenderer {
   }
 
   private fillStroke(ctx: Context2D, stroke: Stroke) {
-    let path = this.paths.get(stroke)
-    if (!path) {
-      path = this.options.createPath(strokeOutline(stroke.points, stroke.style.width, this.options.outline))
-      this.paths.set(stroke, path)
+    let ink = this.paths.get(stroke)
+    if (!ink) {
+      ink = this.buildInk(stroke.points, stroke.style.width)
+      this.paths.set(stroke, ink)
       this.pathsBuilt++
     }
-    ctx.fillStyle = this.inkColor(stroke.style.color)
-    ctx.fill(path as never)
+    this.paintInk(ctx, ink, stroke.style)
+  }
+
+  /** A dot is filled as a circle; anything longer is stroked along its centre line, so tight turns cannot leave gaps. */
+  private buildInk(points: ArrayLike<number>, width: number): Ink {
+    const line = strokeCenterline(points, this.options.outline)
+    if (line.length > 2) return { path: this.options.createPath(line, false), line: true }
+    return { path: this.options.createPath(strokeOutline(points, width, this.options.outline)), line: false }
+  }
+
+  private paintInk(ctx: Context2D, ink: Ink, style: StrokeStyle) {
+    const color = this.inkColor(style.color)
+    if (!ink.line) { ctx.fillStyle = color; ctx.fill(ink.path as never); return }
+    ctx.strokeStyle = color
+    ctx.lineWidth = style.width
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.stroke(ink.path as never)
   }
 
   private clear(ctx: Context2D) {
@@ -330,11 +349,11 @@ export class CanvasRenderer {
   }
 }
 
-export function createPath2D(outline: number[]): Path2D {
+export function createPath2D(points: number[], closed = true): Path2D {
   const path = new Path2D()
-  if (outline.length < 2) return path
-  path.moveTo(outline[0], outline[1])
-  for (let i = 2; i < outline.length; i += 2) path.lineTo(outline[i], outline[i + 1])
-  path.closePath()
+  if (points.length < 2) return path
+  path.moveTo(points[0], points[1])
+  for (let i = 2; i < points.length; i += 2) path.lineTo(points[i], points[i + 1])
+  if (closed) path.closePath()
   return path
 }

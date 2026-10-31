@@ -12,6 +12,8 @@ class FakeContext implements Context2D {
   fillStyle: unknown = '#000'
   strokeStyle: unknown = '#000'
   lineWidth = 1
+  lineCap: CanvasLineCap = 'butt'
+  lineJoin: CanvasLineJoin = 'miter'
   globalAlpha = 1
   transform: number[] = []
   setTransform(...m: number[]) { this.transform = m; this.calls.push('transform') }
@@ -25,8 +27,10 @@ class FakeContext implements Context2D {
   closePath() { this.calls.push('closePath') }
   setLineDash() { this.calls.push('dash') }
   arc() { this.calls.push('arc') }
-  stroke() { this.calls.push('stroke') }
+  stroke() { this.calls.push(`stroke:${String(this.strokeStyle)}`) }
 }
+
+const isInk = (call: string) => call.startsWith('fill:') || call.startsWith('stroke:')
 
 function fakeCanvas(): CanvasLike & { ctx: FakeContext } {
   const ctx = new FakeContext()
@@ -51,7 +55,7 @@ test('scene draws exactly the given strokes and caches each path across redraws'
   const strokes = generateStrokes(50)
   renderer.drawScene(strokes, { x: 0, y: 0, z: 1 })
   renderer.drawScene(strokes, { x: 30, y: 10, z: 1.5 })
-  assert.equal(base.ctx.calls.filter(c => c.startsWith('fill')).length, 100)
+  assert.equal(base.ctx.calls.filter(isInk).length, 100)
   assert.equal(built(), 50)
   assert.deepEqual(base.ctx.transform, [3, 0, 0, 3, -90, -30])
 })
@@ -62,7 +66,24 @@ test('committing a stroke draws only that stroke and does not clear the base lay
   renderer.drawScene([a], { x: 0, y: 0, z: 1 })
   base.ctx.calls = []
   renderer.drawStroke(b, { x: 0, y: 0, z: 1 })
-  assert.deepEqual(base.ctx.calls, ['transform', 'fill:#1b1f24'])
+  assert.deepEqual(base.ctx.calls, ['transform', 'stroke:#1b1f24'])
+})
+
+test('ink is stroked along its centre line at its width with round joins; a lone dot is filled', () => {
+  const live = fakeCanvas()
+  const built: Array<{ points: number[]; closed: boolean }> = []
+  const r = new CanvasRenderer({ paper: fakeCanvas(), base: fakeCanvas(), live, snapshot: fakeCanvas() }, {
+    createPath: (points, closed = true) => { built.push({ points, closed }); return {} },
+  })
+  r.resize(800, 600, 1)
+  // A hairpin turn much tighter than the width: an outline polygon folds here, a round-joined stroke cannot.
+  r.drawLive([0, 0, 0.5, 0, 20, 0, 0.5, 4, 20, 1, 0.5, 8, 0, 1, 0.5, 12], { color: '#ff0000', width: 8 }, { x: 0, y: 0, z: 1 })
+  assert.equal(built.at(-1)?.closed, false)
+  assert.deepEqual([live.ctx.lineWidth, live.ctx.lineCap, live.ctx.lineJoin], [8, 'round', 'round'])
+  assert.equal(live.ctx.calls.at(-1), 'stroke:#ff0000')
+  r.drawLive([5, 5, 0.5, 0], { color: '#00ff00', width: 4 }, { x: 0, y: 0, z: 1 })
+  assert.equal(built.at(-1)?.closed, true)
+  assert.equal(live.ctx.calls.at(-1), 'fill:#00ff00')
 })
 
 test('live layer redraw touches only the live canvas', () => {
@@ -70,7 +91,7 @@ test('live layer redraw touches only the live canvas', () => {
   base.ctx.calls = []
   renderer.drawLive([0, 0, 0.5, 0, 10, 0, 0.5, 4], { color: '#ff0000', width: 3 }, { x: 0, y: 0, z: 1 })
   assert.deepEqual(base.ctx.calls, [])
-  assert.deepEqual(live.ctx.calls, ['transform', 'clear', 'transform', 'fill:#ff0000'])
+  assert.deepEqual(live.ctx.calls, ['transform', 'clear', 'transform', 'stroke:#ff0000'])
   renderer.clearLive()
   assert.equal(live.ctx.calls.at(-1), 'clear')
 })
@@ -127,7 +148,7 @@ test('on dark paper near-black ink is shown light; colored ink is unchanged', ()
   const [a] = generateStrokes(1)
   renderer.paper = { color: 'slate', pattern: 'blank' }
   renderer.drawScene([a], { x: 0, y: 0, z: 1 })
-  assert.ok(base.ctx.calls.includes('fill:#e6e8eb'))
+  assert.ok(base.ctx.calls.includes('stroke:#e6e8eb'))
   assert.equal(a.style.color, '#1b1f24', 'stored color is untouched')
 })
 
@@ -157,7 +178,7 @@ test('exportView composes paper, pictures and ink on throwaway canvases and neve
   const [paperLayer, base, live, snapshot] = made.slice(-4)
   assert.equal(shown.canvas, paperLayer, 'the paper canvas carries the finished picture')
   assert.equal(paperLayer.ctx.fillStyle, '#16181c')
-  assert.ok(base.ctx.calls.filter(c => c.startsWith('fill')).length === shown.strokes)
+  assert.ok(base.ctx.calls.filter(isInk).length === shown.strokes)
   assert.equal(base.ctx.images.length, 1, 'the picture is drawn')
   assert.ok(paperLayer.ctx.images.length === 1, 'ink layer is laid over the paper')
   assert.deepEqual(live.ctx.calls, [], 'no live stroke, selection frame or eraser ring')
