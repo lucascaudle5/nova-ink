@@ -32,7 +32,7 @@ body { display: flex; flex-direction: column; overscroll-behavior: none; -webkit
 
 button { font: inherit; color: inherit; cursor: pointer; }
 .floating button {
-  flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 11px;
+  flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px;
   background: transparent; color: #3d434b; display: grid; place-items: center;
   transition: background-color .12s, color .12s, opacity .12s;
 }
@@ -73,7 +73,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .popover .custom input[type=text]:focus { border-color: var(--accent); }
 .popover .custom input.bad { border-color: var(--danger); }
 
-.menu { top: calc(var(--top) + 60px); right: max(12px, env(safe-area-inset-right)); width: 230px; padding: 6px; display: flex; flex-direction: column; transform-origin: top right; }
+.menu { top: calc(var(--top) + 64px); right: max(12px, env(safe-area-inset-right)); width: 230px; padding: 6px; display: flex; flex-direction: column; transform-origin: top right; }
 .menu-label { padding: 6px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .menu-rule { height: 1px; background: var(--line); margin: 6px 4px; }
 .menu button, .menu .file { display: block; width: 100%; text-align: left; padding: 10px; border: 0; border-radius: 9px; background: transparent; box-sizing: border-box; cursor: pointer; }
