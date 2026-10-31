@@ -235,6 +235,13 @@ export function mountTools(surface: InkSurface, options: ToolsOptions): Tools {
     build(popover)
     const rect = anchor.getBoundingClientRect()
     popover.hidden = false
+    // From a vertical sidebar, beside it rather than below the button, so the sidebar stays uncovered.
+    const side = anchor.closest('.rail')?.getBoundingClientRect()
+    if (side) {
+      popover.style.left = `${side.right + 10}px`
+      popover.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - popover.offsetHeight - 8))}px`
+      return
+    }
     const left = rect.left + rect.width / 2 - popover.offsetWidth / 2
     popover.style.left = `${Math.max(8, Math.min(left, window.innerWidth - popover.offsetWidth - 8))}px`
     // Below the button, or above it when there is no room (a button near the bottom of the screen).

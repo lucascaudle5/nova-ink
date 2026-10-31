@@ -6,10 +6,8 @@ import { InkSurface } from '../engine/src/dom/surface'
 import { $, el, mountTools, readStored, writeStored } from '../engine/harness/tools'
 import { MAX_WIDTH, MIN_WIDTH, PALETTE } from '../engine/harness/presets'
 import { MockServer } from './mock-server'
-import { ASK_DISCLOSURE, askDelivery, askMessage, askRefusal, blobToBase64, HELP_LEVELS, HELP_ORDER, MAX_IMAGE_BASE64, MAX_QUESTION } from './ask'
-import type { AskInput, AskScope, HelpLevel } from './ask'
-import { notebookContext } from './context'
-import type { NotebookView } from './context'
+import { acceptsPictures, blobToBase64, MAX_PICTURE_BASE64, notebookContext } from './context'
+import type { NotebookView, Seen } from './context'
 import type { Bounds } from '../engine/src/core/types'
 import { JobRunner } from './jobs'
 import { isPdf, openPdf, PAGE_UNITS_PER_POINT, PDF_MAX_PAGES, PDF_MAX_SIDE } from './pdf'
@@ -80,7 +78,7 @@ const tools = mountTools(surface, {
   onPenStyle: color => { penDot.style.background = color },
 })
 
-// ---- Tool rail (left edge): pen, eraser, select, undo, redo; can be hidden down to one small button ----
+// ---- Sidebar (left edge, top to bottom): every control; can be hidden down to one small button ----
 
 function showPenFlyout(open: boolean, anchor?: HTMLElement) {
   if (open) {
@@ -88,7 +86,7 @@ function showPenFlyout(open: boolean, anchor?: HTMLElement) {
     closePanels()
     tools.closePopover()
     const rect = (anchor ?? document.querySelector<HTMLElement>('button[data-tool="pen"]')!).getBoundingClientRect()
-    penFlyout.style.left = `${rect.right + 10}px`
+    penFlyout.style.left = `${rail.getBoundingClientRect().right + 10}px`
     penFlyout.style.top = `${rect.top}px`
   }
   penFlyout.hidden = !open
@@ -105,7 +103,7 @@ function showSelectFlyout(open: boolean, anchor?: HTMLElement) {
     closePanels()
     tools.closePopover()
     const rect = (anchor ?? document.querySelector<HTMLElement>('button[data-tool="select"]')!).getBoundingClientRect()
-    selectFlyout.style.left = `${rect.right + 10}px`
+    selectFlyout.style.left = `${rail.getBoundingClientRect().right + 10}px`
     selectFlyout.style.top = `${rect.top}px`
   }
   selectFlyout.hidden = !open
@@ -133,6 +131,7 @@ surface.onChange(() => { if (!selectFlyout.hidden && surface.tool !== 'select') 
 function setRailCollapsed(collapsed: boolean) {
   rail.hidden = collapsed
   railHandle.hidden = !collapsed
+  document.body.classList.toggle('rail-collapsed', collapsed)
   if (collapsed) { showPenFlyout(false); showSelectFlyout(false); tools.closePopover() }
   writeStored(RAIL_KEY, collapsed ? '1' : '0')
 }
@@ -165,7 +164,7 @@ const editor: PageEditor = {
   setReadOnly(readOnly) {
     surface.readOnly = readOnly
     document.body.classList.toggle('read-only', readOnly)
-    for (const b of document.querySelectorAll<HTMLButtonElement>('.rail button:not(#rail-collapse):not(#rail-expand), #page, #insert-image')) b.disabled = readOnly
+    for (const b of document.querySelectorAll<HTMLButtonElement>('.rail button.tool, #undo, #redo, #page, #insert-image')) b.disabled = readOnly
     if (readOnly) tools.closePopover()
   },
 }
@@ -336,7 +335,6 @@ $('sel-turn').addEventListener('click', () => surface.rotateSelection())
 $('sel-duplicate').addEventListener('click', () => surface.duplicateSelection())
 $('sel-delete').addEventListener('click', () => surface.deleteSelection())
 $('sel-done').addEventListener('click', () => surface.setTool('pen'))
-$('sel-ask').addEventListener('click', () => askSheet())
 $('sel-style').addEventListener('click', () => tools.togglePopover('selection-style', $('sel-style'), buildSelectionStyle))
 // While the selection is being turned by its handle, show the angle in the bar.
 surface.onTurnPreview = angle => { turning = angle; renderSelectionBar() }
@@ -853,161 +851,12 @@ function folderSheet(f: FolderInfo | null) {
   openSheet(f ? 'Folder' : 'New folder', [input, note], buttons)
 }
 
-// ---- Ask NOVA ----
+// ---- Snip bar: drag a rectangle over the page; Claude then sees only that area ----
 
-let askLevel: HelpLevel = 'nudge'
-let askSending = false
-/** While an Ask stages its picture in the model context, the notebook's own context updates must not replace it. */
-let sendingAsk = false
-
-/** In the desktop preview nothing is sent; the message is kept here so it can be inspected. */
-const askLog: Array<{ role: string; content: Array<{ type: string; text?: string; mimeType?: string; bytes?: number }> }> = []
-if (preview) Object.assign(window, { novaAskLog: askLog })
-
-function askInput(question: string, scope: AskScope, area: Bounds | null): AskInput {
-  const state = session.getState()
-  const notebook = state.notebooks.find(n => n.id === state.notebookId)
-  const live = livePages(state)
-  const counts = scope === 'selection' ? surface.selectionCounts() : (scope === 'area' || scope === 'page') && area ? surface.areaCounts(area) : surface.viewCounts()
-  return {
-    scope,
-    notebook: notebook?.name ?? 'Notebook', pageTitle: session.currentPage?.title ?? 'Page',
-    pageNumber: Math.max(1, live.findIndex(p => p.id === state.pageId) + 1), pageCount: live.length,
-    paper: surface.paper, zoom: surface.camera.z, visibleStrokes: counts.strokes, visiblePictures: counts.images,
-    helpLevel: askLevel, question,
-  }
-}
-
-/** Pictures other than the screen are tried at these long-side sizes, largest first, until one fits in the message. */
-const ASK_SIZES = [4000, 3000, 2000, 1600]
-
-/** The picture to send, as base64 PNG: the screen, or the selection or a rectangle shrunk until it fits in a message. */
-async function renderForAsk(scope: AskScope, area: Bounds | null): Promise<string> {
-  if (scope === 'screen') return blobToBase64(await surface.exportView())
-  let png = ''
-  for (const side of ASK_SIZES) {
-    const blob = scope === 'selection' ? surface.exportSelection(side) : area ? surface.exportArea(area, side) : null
-    if (!blob) throw new Error('There is nothing to show.')
-    png = await blobToBase64(await blob)
-    if (png.length <= MAX_IMAGE_BASE64) break
-  }
-  return png
-}
-
-const SCOPE_NOUN: Record<AskScope, string> = { screen: 'the screen', selection: 'the selection', area: 'that area', page: 'the page' }
-
-/** Student-initiated only: this runs when Send is tapped, never on its own. Reports "Sent" or the reason it was not. */
-async function sendAsk(question: string, scope: AskScope, say: (text: string, tone?: 'ok' | 'bad') => void, area: Bounds | null = null): Promise<boolean> {
-  const input = askInput(question, scope, area)
-  const early = askRefusal(input, null)
-  if (early) { say(early, 'bad'); return false }
-  say('Rendering your work…')
-  let png: string
-  try { png = await renderForAsk(scope, area) } catch (error) {
-    say(`Could not render ${SCOPE_NOUN[scope]}, so nothing was sent (${error instanceof Error ? error.message : String(error)}).`, 'bad')
-    return false
-  }
-  // The student may have moved or edited while the picture was prepared; send what the picture shows.
-  const refusal = askRefusal(input, png.length)
-  if (refusal) { say(refusal, 'bad'); return false }
-  const message = askMessage(input, png)
-  if (!app) {
-    askLog.push({ role: message.role, content: message.content.map(c => c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', mimeType: c.mimeType, bytes: c.data.length }) })
-    say('Preview: logged in window.novaAskLog; nothing was sent to NOVA.', 'ok')
-    return true
-  }
-  const caps = app.getHostCapabilities()
-  const delivery = askDelivery(caps)
-  if (!delivery) {
-    const kinds = Object.keys(caps?.message ?? {}).join(', ') || 'nothing'
-    say(`Not sent: this Claude app does not accept pictures from the notebook (it accepts ${kinds}).`, 'bad')
-    return false
-  }
-  say('Sending to NOVA…')
-  try {
-    sendingAsk = true
-    if (delivery === 'context') {
-      const [text, image] = message.content
-      await app.updateModelContext({ content: [image] })
-      const answer = await app.sendMessage({ role: 'user', content: [{ type: 'text', text: `${text.type === 'text' ? text.text : ''}\nThe picture is attached to this conversation's notebook context.` }] })
-      if (answer.isError) throw new Error('Claude did not accept the message')
-    } else {
-      const answer = await app.sendMessage(message)
-      if (answer.isError) throw new Error('Claude did not accept the message')
-    }
-  } catch (error) {
-    say(`Not sent: ${error instanceof Error ? error.message : String(error)}`, 'bad')
-    return false
-  } finally {
-    sendingAsk = false
-  }
-  say('Sent. The answer will appear in the chat.', 'ok')
-  return true
-}
-
-function askSheet() {
-  tools.closePopover()
-  closePanels()
-  showPenFlyout(false)
-  showSelectFlyout(false)
-  askSending = false
-  const label = (text: string) => el('div', { className: 'sheet-label', textContent: text })
-  const hint = el('div', { className: 'ask-hint' })
-  const segments = el('div', { className: 'segmented', role: 'radiogroup', ariaLabel: 'Help level' })
-  const paintLevels = () => {
-    segments.replaceChildren(...HELP_ORDER.map(level => {
-      const b = el('button', { className: level === askLevel ? 'selected' : '', textContent: HELP_LEVELS[level].label, role: 'radio', ariaChecked: String(level === askLevel) })
-      b.addEventListener('click', () => { askLevel = level; paintLevels() })
-      return b
-    }))
-    hint.textContent = HELP_LEVELS[askLevel].instruction
-  }
-  paintLevels()
-  // With something selected, the picture is the selection unless the student picks the screen.
-  let showing: 'screen' | 'selection' = surface.selectionCount ? 'selection' : 'screen'
-  const scopeRow = el('div', { className: 'segmented two', role: 'radiogroup', ariaLabel: 'What to show' })
-  const paintScope = () => {
-    const choices: Array<['screen' | 'selection', string]> = [['screen', 'What is on screen'], ['selection', `Your selection (${surface.selectionCount})`]]
-    scopeRow.replaceChildren(...choices.map(([scope, text]) => {
-      const b = el('button', { className: scope === showing ? 'selected' : '', textContent: text, role: 'radio', ariaChecked: String(scope === showing) })
-      b.addEventListener('click', () => { showing = scope; paintScope() })
-      return b
-    }))
-  }
-  paintScope()
-  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for NOVA if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
-  const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
-  const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
-  const send = action('Send', async () => {
-    if (askSending) return
-    askSending = true
-    send.disabled = true
-    const sent = await sendAsk(question.value, showing, say)
-    askSending = false
-    send.disabled = false
-    if (sent) question.value = ''
-  }, 'text primary')
-  const choose = action('Choose an area', () => { askNote = question.value.trim(); snipFromSheet = true; closeSheet(); surface.startSnip() }, 'text')
-  openSheet('Ask NOVA', [label('Help level'), segments, hint, ...(surface.selectionCount ? [label('Show'), scopeRow] : []), label('Note (optional)'), question, el('div', { className: 'ask-disclosure', textContent: ASK_DISCLOSURE }), result], [action('Close', closeSheet, 'text'), choose, send])
-}
-
-// ---- Snip bar: drag a rectangle over the page, pick a level, send just that ----
-
-/** The note typed in the Ask NOVA sheet, carried to the snip bar when the student chooses an area from there. */
-let askNote = ''
-let snipFromSheet = false
-let snipShown = false
-let snipSending = false
+/** The rectangle the student chose for Claude to see instead of the screen, on one page. */
+let pinned: { pageId: string; area: Bounds; whole: boolean } | null = null
 /** What the last message in the snip bar was about: it is cleared when the page or the rectangle changes. */
 let snipMessageKey = ''
-
-function paintSnipLevels() {
-  $('snip-levels').replaceChildren(...HELP_ORDER.map(level => {
-    const b = el('button', { className: level === askLevel ? 'selected' : '', textContent: HELP_LEVELS[level].label, role: 'radio', ariaChecked: String(level === askLevel) })
-    b.addEventListener('click', () => { askLevel = level; paintSnipLevels() })
-    return b
-  }))
-}
 
 function snipSay(text: string, tone?: 'ok' | 'bad') {
   const result = $('snip-result')
@@ -1018,32 +867,23 @@ function snipSay(text: string, tone?: 'ok' | 'bad') {
 function renderSnipBar() {
   const on = surface.tool === 'snip'
   $('snip-bar').hidden = !on
-  if (on && !snipShown) {
-    // Just opened: from the Ask NOVA sheet it keeps that sheet's note; from the rail it starts without one.
-    if (!snipFromSheet) askNote = ''
-    snipFromSheet = false
-    snipSay('')
-    paintSnipLevels()
-  }
-  snipShown = on
   if (!on) return
   const key = session.getState().pageId + JSON.stringify(surface.snipArea)
-  if (key !== snipMessageKey) { if (!snipSending) snipSay(''); snipMessageKey = key }
-  const note = $('snip-note')
-  note.textContent = askNote ? `Note: ${askNote}` : ''
-  $<HTMLButtonElement>('snip-send').disabled = snipSending
+  if (key !== snipMessageKey) { snipSay(''); snipMessageKey = key }
 }
 
 $('snip-cancel').addEventListener('click', () => surface.endSnip())
-$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show NOVA.', 'bad') })
-$('snip-send').addEventListener('click', async () => {
+$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show Claude.', 'bad') })
+$('snip-show').addEventListener('click', () => {
   const area = surface.snipArea
-  if (!area || snipSending) return
-  snipSending = true
-  renderSnipBar()
-  try { await sendAsk(askNote, surface.snipIsWholePage ? 'page' : 'area', snipSay, area) } finally { snipSending = false; renderSnipBar() }
+  const pageId = session.getState().pageId
+  if (!area || !pageId) return
+  const inside = surface.areaCounts(area)
+  if (inside.strokes + inside.images === 0) { snipSay('There is no work inside that rectangle. Drag it over your work.', 'bad'); return }
+  pinned = { pageId, area, whole: surface.snipIsWholePage }
+  surface.endSnip()
+  pictureChanged()
 })
-$('ask-button').addEventListener('click', askSheet)
 
 // ---- More menu ----
 
@@ -1072,6 +912,7 @@ function renderMenu() {
   const modes = host?.availableDisplayModes ?? []
   if (app && modes.includes('fullscreen') && host?.displayMode !== 'fullscreen') items.push(action('Full screen', () => { void app!.requestDisplayMode({ mode: 'fullscreen' }).catch(() => {}); openMenu(false) }))
   if (app && modes.includes('inline') && host?.displayMode === 'fullscreen') items.push(action('Show in chat', () => { void app!.requestDisplayMode({ mode: 'inline' }).catch(() => {}); openMenu(false) }))
+  items.push(action(sharing ? 'Stop showing Claude my page' : 'Show Claude my page', () => { sharing = !sharing; openMenu(false); pictureChanged() }))
   items.push(action('Copy page to a new page', () => { openMenu(false); void session.copyToNewPage() }))
   items.push(action('Fit all ink', () => { openMenu(false); surface.fitToContent(true) }))
 
@@ -1103,10 +944,18 @@ document.addEventListener('pointerdown', e => {
 })
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else { openMenu(false); closePanels() } } })
 
-// ---- Claude's context: where the student is ----
+// ---- What Claude sees: where the student is and a picture of the work, kept in Claude's context ----
 
-let sharedContext = ''
-let contextTimer: ReturnType<typeof setTimeout> | null = null
+/** The student can pause the picture from the More menu; it starts on. */
+let sharing = true
+/** The last update Claude has, as the text it was built from; empty when it must be sent again. */
+let sharedKey = ''
+let pictureStale = true
+let shareTimer: ReturnType<typeof setTimeout> | null = null
+let sharingNow = false
+/** In the desktop preview nothing leaves the page; each update is kept here so it can be inspected. */
+const contextLog: Array<{ text: string; image: number | null }> = []
+if (preview) Object.assign(window, { novaContextLog: contextLog })
 
 function currentView(): NotebookView {
   const state = session.getState()
@@ -1123,20 +972,79 @@ function currentView(): NotebookView {
   }
 }
 
-/** Keeps Claude's view of the notebook current, at most every 1.5 s and only when it changed. Never sends a message. */
-function shareContext() {
-  if (!app || contextTimer) return
-  contextTimer = setTimeout(() => {
-    contextTimer = null
-    const accepts = app?.getHostCapabilities()?.updateModelContext
-    if (!app || !accepts || sendingAsk || session.getState().status === 'loading') return
-    const text = notebookContext(currentView())
-    if (text === sharedContext) return
-    sharedContext = text
-    app.updateModelContext({ content: [{ type: 'text', text }] }).catch(() => { sharedContext = '' })
-  }, 1500)
+function pinHere() {
+  return pinned && pinned.pageId === session.getState().pageId ? pinned : null
 }
-surface.onChange(shareContext)
+
+/** What Claude is shown now: the snipped area if there is one on this page, else the screen; or why nothing. */
+function seenNow(view: NotebookView): Seen {
+  if (!sharing) return 'paused'
+  if (app && !acceptsPictures(app.getHostCapabilities()?.updateModelContext)) return 'unsupported'
+  const pin = pinHere()
+  if (pin) return pin.whole ? 'page' : 'area'
+  return view.onScreen.strokes + view.onScreen.pictures ? 'screen' : 'empty'
+}
+
+async function picture(seen: Seen): Promise<string | null> {
+  const pin = pinHere()
+  const blob = seen === 'screen' ? await surface.exportView() : pin ? await surface.exportArea(pin.area, 1600) : null
+  return blob ? blobToBase64(blob) : null
+}
+
+function pictureChanged() {
+  pictureStale = true
+  shareContext()
+  renderSharing()
+}
+
+/** Keeps Claude's view current, at most every 2 s and only when something changed. Never sends a message. */
+function shareContext() {
+  if (shareTimer) return
+  shareTimer = setTimeout(() => { shareTimer = null; void flushContext() }, 2000)
+}
+
+async function flushContext() {
+  if (sharingNow || session.getState().status === 'loading') return
+  if (app && !app.getHostCapabilities()?.updateModelContext) return
+  const view = currentView()
+  let seen: Seen = view.page ? seenNow(view) : 'empty'
+  const key = notebookContext(view, seen)
+  const withPicture = !!view.page && (seen === 'screen' || seen === 'area' || seen === 'page')
+  if (key === sharedKey && !(withPicture && pictureStale)) return
+  sharingNow = true
+  pictureStale = false
+  try {
+    let image = withPicture ? await picture(seen) : null
+    if (image && image.length > MAX_PICTURE_BASE64) { image = null; seen = 'too-large' }
+    const text = notebookContext(view, seen)
+    const content = [{ type: 'text' as const, text }, ...(image ? [{ type: 'image' as const, data: image, mimeType: 'image/png' }] : [])]
+    if (app) await app.updateModelContext({ content })
+    else contextLog.push({ text, image: image?.length ?? null })
+    sharedKey = key
+  } catch {
+    sharedKey = ''
+  } finally {
+    sharingNow = false
+    if (pictureStale) shareContext()
+  }
+}
+
+/** The line in the status pill that says what Claude sees, with a way back to the screen after a snip. */
+function renderSharing() {
+  const box = $('sharing')
+  const view = currentView()
+  if (!view.page) { box.replaceChildren(); return }
+  const seen = seenNow(view)
+  const text: Record<Seen, string> = {
+    screen: 'Claude sees this screen', empty: 'Claude sees this screen', area: 'Claude sees your snip', page: 'Claude sees the whole page',
+    paused: 'Not showing Claude', unsupported: 'Claude sees the page name only', 'too-large': 'Claude sees this screen',
+  }
+  const items: Node[] = [document.createTextNode(text[seen])]
+  if (pinHere() && sharing) items.push(action('Show the screen', () => { pinned = null; pictureChanged() }, 'text'))
+  box.replaceChildren(...items)
+}
+
+surface.onChange(pictureChanged)
 setInterval(shareContext, 5000)
 
 // ---- Lifecycle ----
@@ -1150,6 +1058,8 @@ function render() {
   rememberPage(state)
   if (rendered?.revision !== state.revision || rendered?.editable !== state.editable) renderMenu()
   rendered = state
+  if (pinned && pinned.pageId !== state.pageId) pinned = null
+  renderSharing()
   shareContext()
 }
 session.subscribe(render)

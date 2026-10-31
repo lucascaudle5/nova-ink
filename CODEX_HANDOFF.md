@@ -280,6 +280,12 @@ NOVA Ink connects to the personal Gemini app as a custom MCP app (Settings > Con
 
 **Not verified:** all of the above inside Claude; which image route Claude accepts; whether Claude's top navigation bar is reported in `safeAreaInsets.top` on iPad.
 
+**Ask NOVA removed; Photoshop-style sidebar (October 30, 2026, ~10:40 PM; user decisions; committed and pushed on engine/spike; NOT deployed):**
+- Decision (Lucas): questions go in Claude's own chat box. Ask NOVA (sheet, help levels, selection-bar button, sendMessage) is gone, along with ask.ts and its tests.
+- Decision (Lucas): the notebook keeps a picture of what is on screen in Claude's model context, alongside the page text (throttled to every 2 s, only when something changed, PNG ≤ 3 MB, never a message). Snip stays: "Show Claude" pins that rectangle (or Whole page) as the picture until "Show the screen" in the status pill or a page change. The More menu has "Stop showing Claude my page" / "Show Claude my page". The status pill says what Claude sees. If the host does not take pictures in model context, Claude is told so and gets text only.
+- Decision (Lucas): every control is in one sidebar on the left edge, from the top of the tappable area to the bottom: notebook (library, pages, previous/next), tools, undo/redo, insert/page style, then zoom, full screen, More and hide at the bottom. Below 1000 px tall (iPad landscape, most desktops) it becomes two columns. The page title is a label beside it; popovers, flyouts, the Pages panel and the More menu open beside the sidebar.
+- Checks (this PC): `tsc -p engine-app` clean; `test:engine-app` 31/31; `build:engine-app` OK (430 KB); `test:browser` 15/15 (new tests: the screen picture in context, empty/paused, snip pin and Show the screen, the sidebar spans top to bottom and holds every control). Looked at in the preview at 1180×820 (two columns) and full height (one column). Not seen in Claude or on the iPad.
+
 **Next steps:** (1) With the user's go-ahead, deploy (`cd cloudflare; npm run deploy:engine`). (2) The user adds the connector on claude.ai web: Customize > Connectors > Add > Custom > Web, URL `https://nova-ink-engine.ai-nova-personal.workers.dev/mcp`, sign in through Access. (3) On the iPad, in the Claude app, start a chat with the connector on, say "Open NOVA Ink", and run the quick check in IPAD_ACCEPTANCE.md plus Ask NOVA and a PDF insert. (4) Remove the ChatGPT connector, and delete the `nova-gemini-probe` Worker and the Gemini custom app when the user agrees.
 
 ### Long-term foundations

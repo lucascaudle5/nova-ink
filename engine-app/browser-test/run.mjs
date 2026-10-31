@@ -287,106 +287,83 @@ await test('input recovers when a pointer is lost (no pen-up, no cancel)', async
   assert.equal(await strokeCount(), before + 1, 'drawing works again')
 })
 
-await test('Ask NOVA sends with no note, keeps the keyboard away, and sends a note when there is one', async () => {
+await test('Claude sees the screen: writing puts the page and a picture of the screen in Claude\'s context, never a message', async () => {
+  assert.equal(await evaluate('!!document.getElementById("ask-button") || !!document.getElementById("sel-ask")'), false, 'there is no Ask NOVA button')
+  await drawStroke(500, 'pen'); await sleep(2600)
+  const last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(last && /exactly what is on the student's screen/.test(last.text), 'the latest update says it is the screen (' + (last?.text ?? '').slice(0, 160) + ')')
+  assert.ok(/pageId [0-9a-f-]{36}/.test(last.text), 'it names the page')
+  assert.ok(last.image > 1000, 'it carries a picture')
+  assert.ok(/Claude sees this screen/.test(await evaluate('document.getElementById("sharing").textContent')), 'the status pill says what Claude sees')
+})
+
+await test('an empty screen sends no picture; pausing from the More menu stops the picture and says so', async () => {
+  await sleep(2600)
+  let last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(last && last.image === null && /no work on screen/.test(last.text), 'no picture of an empty screen')
   await drawStroke(500, 'pen')
-  await clickSel('#ask-button'); await sleep(300)
-  assert.equal(await evaluate('document.getElementById("sheet").hidden'), false, 'the sheet opens')
-  assert.equal(await evaluate('document.activeElement && document.activeElement.tagName === "TEXTAREA"'), false, 'the note box is not focused, so no keyboard pops up')
-  assert.ok((await evaluate('document.getElementById("sheet").textContent')).includes('Note (optional)'), 'the note is labelled optional')
-  await evaluate('[...document.querySelectorAll("#sheet .segmented button")].find(b => /check/i.test(b.textContent)).click()')
-  const send = () => evaluate('[...document.querySelectorAll("#sheet button")].find(b => b.textContent.trim() === "Send").click()')
-  await send(); await sleep(800)
-  let log = await json('window.novaAskLog')
-  assert.equal(log.length, 1, 'one message was sent')
-  const text = log[0].content.find(c => c.type === 'text').text
-  assert.ok(/added no note/.test(text), 'the message says there was no note')
-  assert.ok(log[0].content.some(c => c.type === 'image'), 'the screenshot is attached')
-  await evaluate('(() => { const t = document.querySelector("#sheet textarea"); t.value = "Is my sketch right?"; t.dispatchEvent(new Event("input", { bubbles: true })) })()')
-  await send(); await sleep(800)
-  log = await json('window.novaAskLog')
-  assert.equal(log.length, 2, 'a second message was sent')
-  assert.ok(log[1].content.find(c => c.type === 'text').text.includes('Is my sketch right?'), 'the note is in the message')
+  await clickSel('#menu-button'); await sleep(300)
+  await evaluate('[...document.querySelectorAll("#menu button")].find(b => /Stop showing Claude/.test(b.textContent)).click()'); await sleep(2600)
+  last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(last.image === null && /paused sharing/.test(last.text), 'paused: no picture, and Claude is told why')
+  assert.ok(/Not showing Claude/.test(await evaluate('document.getElementById("sharing").textContent')), 'the status pill says so')
+  await clickSel('#menu-button'); await sleep(300)
+  await evaluate('[...document.querySelectorAll("#menu button")].find(b => /Show Claude my page/.test(b.textContent)).click()'); await sleep(2600)
+  assert.ok((await json('window.novaContextLog')).at(-1).image > 1000, 'turned back on, the picture returns')
 })
 
-await test('Ask NOVA with nothing on screen refuses instead of sending', async () => {
-  await clickSel('#ask-button'); await sleep(300)
-  await evaluate('[...document.querySelectorAll("#sheet button")].find(b => b.textContent.trim() === "Send").click()'); await sleep(500)
-  assert.equal((await json('window.novaAskLog')).length, 0, 'nothing was sent')
-  assert.ok(/no work on screen/i.test(await evaluate('document.querySelector("#sheet .ask-result").textContent')), 'the sheet says why')
-})
-
-const sheetButton = label => evaluate('[...document.querySelectorAll("#sheet button")].find(b => b.textContent.trim() === ' + JSON.stringify(label) + ').click()')
 const barButton = id => evaluate('document.getElementById(' + JSON.stringify(id) + ').click()')
 const selCount = () => json('novaSurface.selectionCounts()')
 /** A closed loop (pen) around a screen rectangle, ending right where it began. */
 const loopAround = (x0, y0, x1, y1) => [...line([x0, y0], [x1, y0], 6), ...line([x1, y0], [x1, y1], 6).slice(1), ...line([x1, y1], [x0, y1], 6).slice(1), ...line([x0, y1], [x0, y0 + 2], 6).slice(1)]
 
-await test('choosing an area: the Ask sheet hands over its note, Whole page covers everything, an empty page refuses', async () => {
-  // empty page first
-  await clickSel('#ask-button'); await sleep(300)
-  await sheetButton('Choose an area'); await sleep(300)
-  assert.equal(await evaluate('novaSurface.tool'), 'snip', 'Choose an area starts the snip tool')
+await test('snip: a rectangle or the whole page becomes what Claude sees, until Show the screen', async () => {
+  // an empty page cannot be taken whole
+  await clickSel('button[data-tool="snip"]'); await sleep(300)
+  assert.equal(await evaluate('novaSurface.tool'), 'snip', 'the sidebar button starts snipping')
   assert.equal(await evaluate('document.getElementById("snip-bar").hidden'), false, 'the snip bar shows')
   await barButton('snip-whole'); await sleep(300)
   assert.ok(/empty/i.test(await evaluate('document.getElementById("snip-result").textContent')), 'an empty page cannot be taken whole')
   const widths = await json('[...document.querySelectorAll("#snip-bar button")].map(b => [b.textContent.trim(), Math.round(b.getBoundingClientRect().width), b.scrollWidth > b.clientWidth + 1])')
   assert.ok(widths.every(([, w, clipped]) => w >= 60 && !clipped), 'snip bar buttons are wide enough for their words: ' + JSON.stringify(widths))
-  await drag(line([300, 300], [500, 450]), 'pen'); await sleep(200)
-  assert.equal(await evaluate('document.getElementById("snip-result").textContent'), '', 'the old warning goes away once the rectangle changes')
   await barButton('snip-cancel'); await sleep(200)
   assert.equal(await evaluate('novaSurface.tool'), 'select', 'cancel leaves the snip tool')
   assert.equal(await evaluate('document.getElementById("snip-bar").hidden'), true, 'and hides the bar')
-  // two strokes far apart, then look at only one of them
+  // A here, B far away
   await penTool()
-  await drag(line([200, 400], [300, 450]), 'pen')
-  await evaluate('novaSurface.setCamera({ x: 3000, y: 2000, z: 1 })'); await sleep(200)
-  await drag(line([300, 300], [400, 360]), 'pen')
-  assert.equal(await strokeCount(), 2, 'two strokes, thousands of units apart')
-  await evaluate('novaSurface.setCamera({ x: 3000, y: 2000, z: 1 })'); await sleep(200)
-  const before = await camera()
-  await clickSel('#ask-button'); await sleep(300)
-  await evaluate('(() => { const t = document.querySelector("#sheet textarea"); t.value = "Check this page"; t.dispatchEvent(new Event("input", { bubbles: true })) })()')
-  await sheetButton('Choose an area'); await sleep(300)
-  assert.ok((await evaluate('document.getElementById("snip-note").textContent')).includes('Check this page'), 'the note carries over to the snip bar')
-  await barButton('snip-whole'); await sleep(300)
-  assert.equal(await evaluate('novaSurface.snipIsWholePage'), true, 'Whole page selects the whole page')
-  await barButton('snip-send'); await sleep(3000)
-  const log = await json('window.novaAskLog')
-  assert.equal(log.length, 1, 'one message was sent')
-  const text = log[0].content.find(c => c.type === 'text').text
-  assert.ok(text.includes('"scope":"page"'), 'it says it is the whole page')
-  assert.ok(text.includes('Check this page'), 'the note is in the message')
-  assert.ok(/"shown":\{"strokes":2,/.test(text), 'both strokes are counted, not only the one in view')
-  assert.ok(log[0].content.some(c => c.type === 'image' && c.bytes > 1000), 'the picture is attached')
-  assert.equal(await evaluate('novaSurface.tool'), 'snip', 'the snip bar stays open after sending')
-  assert.deepEqual(await camera(), before, 'the camera did not move')
-  await barButton('snip-cancel'); await sleep(200)
-  const size = await jsonAsync('(async () => { const bitmap = await createImageBitmap(await novaSurface.exportPage()); return [bitmap.width, bitmap.height] })()')
-  assert.ok(Math.max(...size) <= 4000 && Math.max(...size) > 1000, 'a large page fills most of the allowed size (' + size + ')')
-  assert.ok(size[0] > size[1], 'the page is wider than tall, like its content')
-})
-
-await test('the snip tool on the rail: drag a rectangle round part of the page and send just that', async () => {
   const c0 = await camera()
-  await drag(line([200, 400], [300, 450]), 'pen')                       // A, inside what we will snip
+  await drag(line([200, 400], [300, 450]), 'pen')
   await evaluate('novaSurface.setCamera({ x: ' + (c0.x + 3000) + ', y: ' + c0.y + ', z: ' + c0.z + ' })'); await sleep(200)
-  await drag(line([300, 300], [400, 360]), 'pen')                       // B, far away
+  await drag(line([300, 300], [400, 360]), 'pen')
   await evaluate('novaSurface.setCamera({ x: ' + c0.x + ', y: ' + c0.y + ', z: ' + c0.z + ' })'); await sleep(200)
+  assert.equal(await strokeCount(), 2, 'two strokes, thousands of units apart')
   await clickSel('button[data-tool="snip"]'); await sleep(300)
-  assert.equal(await evaluate('novaSurface.tool'), 'snip', 'the rail button starts snipping')
-  assert.equal(await evaluate('document.getElementById("snip-bar").hidden'), false, 'the snip bar shows')
   await drag(line([150, 350], [380, 520]), 'pen'); await sleep(200)
   const area = await json('novaSurface.snipArea')
   assert.ok(area && area.maxX - area.minX > 150 && area.maxX - area.minX < 300, 'a rectangle was chosen (' + JSON.stringify(area) + ')')
-  assert.equal(await evaluate('novaSurface.snipIsWholePage'), false, 'it is not the whole page')
-  await barButton('snip-send'); await sleep(3000)
-  const log = await json('window.novaAskLog')
-  assert.equal(log.length, 1, 'one message was sent')
-  const text = log[0].content.find(c => c.type === 'text').text
-  assert.ok(text.includes('"scope":"area"'), 'it says it is a chosen area (' + text.slice(0, 200) + ')')
-  assert.ok(/"shown":\{"strokes":1,/.test(text), 'only the stroke inside the area is counted')
-  assert.ok(log[0].content.some(c => c.type === 'image' && c.bytes > 500), 'the picture is attached')
-  await barButton('snip-cancel'); await sleep(200)
+  await barButton('snip-show'); await sleep(2600)
+  assert.equal(await evaluate('document.getElementById("snip-bar").hidden'), true, 'Show Claude closes the snip bar')
+  let last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(/rectangle of the page the student chose/.test(last.text) && last.image > 500, 'Claude sees the snipped area (' + last.text.slice(0, 160) + ')')
+  assert.ok(/Claude sees your snip/.test(await evaluate('document.getElementById("sharing").textContent')), 'the status pill says so')
+  // panning does not change a snip
+  await evaluate('novaSurface.setCamera({ x: ' + (c0.x + 3000) + ', y: ' + c0.y + ', z: ' + c0.z + ' })'); await sleep(2600)
+  assert.ok(/rectangle of the page/.test((await json('window.novaContextLog')).at(-1).text), 'the snip stays what Claude sees after panning away')
+  await evaluate('[...document.querySelectorAll("#sharing button")].find(b => /Show the screen/.test(b.textContent)).click()'); await sleep(2600)
+  last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(/exactly what is on the student's screen/.test(last.text), 'Show the screen goes back to the screen')
+  // the whole page
+  const before = await camera()
+  await clickSel('button[data-tool="snip"]'); await sleep(300)
+  await barButton('snip-whole'); await sleep(300)
+  assert.equal(await evaluate('novaSurface.snipIsWholePage'), true, 'Whole page selects the whole page')
+  await barButton('snip-show'); await sleep(2600)
+  last = (await json('window.novaContextLog')).at(-1)
+  assert.ok(/whole page/.test(last.text) && /On screen: 1 stroke/.test(last.text) && last.image > 1000, 'Claude sees the whole page (' + last.text.slice(0, 200) + ')')
+  assert.deepEqual(await camera(), before, 'the camera did not move')
+  const size = await jsonAsync('(async () => { const bitmap = await createImageBitmap(await novaSurface.exportPage()); return [bitmap.width, bitmap.height] })()')
+  assert.ok(Math.max(...size) <= 4000 && Math.max(...size) > 1000, 'a large page fills most of the allowed size (' + size + ')')
+  assert.ok(size[0] > size[1], 'the page is wider than tall, like its content')
 })
 
 await test('lasso: a freehand loop or a box picks what it touches; move, duplicate, recolour, delete, all undoable', async () => {
@@ -444,7 +421,7 @@ await test('lasso: a freehand loop or a box picks what it touches; move, duplica
   assert.equal((await selCount()).strokes, 0, 'and clears the selection')
 })
 
-await test('lasso over writing on a picture picks the writing, not the picture; Ask NOVA about the selection', async () => {
+await test('lasso over writing on a picture picks the writing, not the picture', async () => {
   await insertPicture()
   await penTool()
   const p = await picture()
@@ -456,18 +433,17 @@ await test('lasso over writing on a picture picks the writing, not the picture; 
   assert.deepEqual(await selCount(), { strokes: 1, images: 0 }, 'only the writing is picked')
   const after = await picture()
   assert.near(after.x, p.x, 0.5, 'the picture did not move')
-  await barButton('sel-ask'); await sleep(300)
-  await evaluate('[...document.querySelectorAll("#sheet .segmented button")].find(b => /check/i.test(b.textContent)).click()')
-  assert.ok((await evaluate('document.getElementById("sheet").textContent')).includes('Your selection'), 'the sheet offers the selection')
-  await sheetButton('Send'); await sleep(2500)
-  const log = await json('window.novaAskLog')
-  assert.equal(log.length, 1, 'one message was sent')
-  const text = log[0].content.find(c => c.type === 'text').text
-  assert.ok(text.includes('"scope":"selection"') && /"shown":\{"strokes":1,"pictures":0/.test(text), 'it is about the selection only (' + text.slice(0, 220) + ')')
-  assert.ok(log[0].content.some(c => c.type === 'image'), 'the picture is attached')
 })
 
-await test('the tool rail: second tap opens the pen options, hide and show persist', async () => {
+await test('the sidebar: top to bottom with every control; second tap opens the pen options; hide and show persist', async () => {
+  const box = await json('(() => { const r = document.getElementById("rail").getBoundingClientRect(); const e = document.getElementById("rail"); return { top: r.top, bottom: r.bottom, right: r.right, h: innerHeight, scroll: e.scrollHeight - e.clientHeight } })()')
+  assert.ok(box.top <= 13 && box.bottom >= box.h - 13, 'it reaches from the top to the bottom (' + JSON.stringify(box) + ')')
+  assert.ok(box.scroll <= 1, 'every control fits without scrolling')
+  for (const id of ['library-button', 'pages-button', 'prev-page', 'next-page', 'undo', 'redo', 'insert-image', 'page', 'zoom-in', 'zoom-out', 'zoom-reset', 'fit', 'menu-button']) {
+    assert.ok(await evaluate(`!!document.getElementById(${JSON.stringify(id)}).closest('#rail')`), `${id} is in the sidebar`)
+  }
+  const title = await json('document.getElementById("doc-title").getBoundingClientRect().left')
+  assert.ok(title >= box.right, 'the page title sits beside the sidebar, not over it')
   await clickSel('button[data-tool="pen"]'); await sleep(250)
   assert.equal(await evaluate('document.getElementById("pen-flyout").hidden'), false, 'tapping the pen again opens width and colour')
   await clickSel('#width-slots button:nth-child(3)'); await sleep(150)
@@ -480,9 +456,6 @@ await test('the tool rail: second tap opens the pen options, hide and show persi
   assert.equal(await evaluate('document.getElementById("rail").hidden'), true, 'it stays hidden after a reload')
   await clickSel('#rail-expand'); await sleep(250)
   assert.equal(await evaluate('document.getElementById("rail").hidden'), false, 'it comes back')
-  const boxes = await json(`['#rail', '.corner', '.status'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [s, r.left, r.top, r.right, r.bottom] })`)
-  const rail = boxes[0], corner = boxes[1]
-  assert.ok(rail[3] <= corner[1] || rail[4] <= corner[2] || corner[3] <= rail[1] || corner[4] <= rail[2], 'the rail and the top-right buttons do not overlap')
 })
 
 /** A two-page PDF (Letter) with one solid black rectangle per page, so a render can be checked pixel by pixel. */

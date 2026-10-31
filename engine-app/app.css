@@ -22,13 +22,34 @@ body.host-dark :is(.library, .sheet) {
   --accent: #6ea8fe; --danger: #ff7b8a; --shelf: var(--color-background-primary, #1f1e1d); --card: var(--color-background-primary, #2b2a27);
   --folder: var(--color-background-tertiary, #3a3935); --on-accent: #0d1b2e; --on-danger: #2a0a10;
 }
-.corner, .menu { right: var(--right); }
-.zoombar { right: var(--right); bottom: var(--bottom); }
-.status { left: var(--left); bottom: var(--bottom); }
-
-/* Drawing tools: a vertical rail on the left edge under the top bar, so the top row only holds navigation and actions. */
-.rail { top: calc(var(--top) + 68px); left: var(--left); flex-direction: column; gap: 2px; }
-.rail .sep { width: 24px; height: 1px; margin: 5px 0; }
+/* The sidebar: every control, from the top of the tappable area to the bottom, one column or two when the screen is short. */
+:root { --rail-w: 56px; }
+.rail {
+  top: var(--top); bottom: var(--bottom); left: var(--left); flex-direction: column; align-items: center; gap: 2px;
+  overflow-y: auto; scrollbar-width: none; box-sizing: border-box;
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail-group { display: grid; grid-template-columns: 44px; gap: 2px; }
+.rail-spacer { flex: 1 0 6px; }
+.rail .sep { flex: none; width: 24px; height: 1px; margin: 4px 0; }
+.floating.rail button.zoom-label { width: 44px; font-size: 11.5px; }
+@media (max-height: 1000px) {
+  :root { --rail-w: 102px; }
+  .rail-group { grid-template-columns: repeat(2, 44px); }
+  .rail .sep { width: calc(100% - 12px); }
+}
+body.rail-collapsed { --rail-w: 56px; }
+.rail-handle { left: var(--left); }
+/* Things beside the sidebar start past it. */
+.doc-title, .pages, .menu, .status { left: calc(var(--left) + var(--rail-w) + 8px); }
+.doc-title { height: 44px; padding: 0 14px; pointer-events: none; max-width: calc(100vw - var(--rail-w) - 48px); box-sizing: border-box; }
+.status { bottom: var(--bottom); }
+body.in-library .status { left: var(--left); }
+.menu { top: auto; right: auto; bottom: var(--bottom); max-height: calc(100vh - var(--top) - var(--bottom)); overflow-y: auto; transform-origin: bottom left; }
+.status .sharing { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+.status .sharing:empty { display: none; }
+.status .sharing::before { content: "·"; }
+.status .sharing button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink); font-size: 12.5px; min-height: 36px; }
 .rail button.pen-tool { position: relative; }
 .pen-dot { position: absolute; right: 5px; bottom: 5px; width: 11px; height: 11px; border-radius: 50%; background: #1b1f24; box-shadow: 0 0 0 2px #fff, inset 0 0 0 1px rgba(0, 0, 0, .2); }
 .rail button.pen-tool.flyout-open::after { content: ""; position: absolute; right: 1px; top: 50%; margin-top: -3px; border: 3px solid transparent; border-left-color: currentColor; }
@@ -45,11 +66,9 @@ body:is(.dark-paper, .host-dark) .pen-flyout .slots button { color: #c9cfd6; }
 body:is(.dark-paper, .host-dark) .pen-flyout .slots button.current { background: rgba(255, 255, 255, .09); }
 body:is(.dark-paper, .host-dark) .pen-dot { box-shadow: 0 0 0 2px #24282f, inset 0 0 0 1px rgba(255, 255, 255, .25); }
 
-.pagesbar { left: var(--left); }
-.floating button.pages-button { width: auto; max-width: 220px; padding: 0 10px 0 8px; gap: 8px; display: flex; align-items: center; }
 .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 600; }
 
-.status { pointer-events: auto; align-items: center; max-width: calc(100vw - 260px); padding: 6px 8px 6px 12px; }
+.status { pointer-events: auto; align-items: center; max-width: calc(100vw - var(--rail-w) - 48px); flex-wrap: wrap; padding: 6px 8px 6px 12px; }
 .status .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #9aa3ae; }
 .status[data-tone="ok"] .dot { background: #2da44e; }
 .status[data-tone="busy"] .dot { background: #d4a72c; }
@@ -66,7 +85,7 @@ body:is(.dark-paper, .host-dark) .pen-dot { box-shadow: 0 0 0 2px #24282f, inset
 .status .actions button[data-armed="1"], .pages button[data-armed="1"] { background: var(--danger); border-color: var(--danger); color: var(--on-danger); }
 
 .pages {
-  top: calc(var(--top) + 64px); left: var(--left); width: 300px; max-height: calc(100vh - var(--top) - var(--bottom) - 136px);
+  top: var(--top); width: 300px; max-height: calc(100vh - var(--top) - var(--bottom) - 64px);
   display: flex; flex-direction: column; overflow: hidden; transform-origin: top left;
 }
 .pages header { display: flex; gap: 6px; align-items: center; padding: 10px 10px 8px; border-bottom: 1px solid var(--line); }
@@ -119,6 +138,7 @@ body:is(.dark-paper, .host-dark) .pen-dot { box-shadow: 0 0 0 2px #24282f, inset
 }
 .library[hidden] { display: none; }
 body.in-library .status { z-index: 9; }
+body.in-library .doc-title { display: none; }
 .library-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: var(--top) max(20px, var(--right)) 12px max(20px, var(--left));
@@ -207,19 +227,13 @@ body:is(.dark-paper, .host-dark) .status[data-tone="bad"] { background: #3b1d24;
 body:is(.dark-paper, .host-dark) .status[data-tone="bad"] #status-text { color: #ffb3bd; }
 body:is(.dark-paper, .host-dark) .status .actions button, body:is(.dark-paper, .host-dark) .pages button.text, body:is(.dark-paper, .host-dark) .pages select, body:is(.dark-paper, .host-dark) .pages input.rename { background: #2b3038; color: var(--ink); }
 
-.floating button.ask-button { width: auto; padding: 0 10px 0 8px; gap: 6px; display: flex; align-items: center; font-size: 13.5px; font-weight: 600; }
-.ask-button svg { width: 18px; height: 18px; }
 .segmented { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .segmented button { padding: 10px 4px; border: 0; border-right: 1px solid var(--line); background: var(--card); color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
 .segmented button:last-child { border-right: 0; }
 .segmented button.selected { background: var(--accent); color: var(--on-accent); }
-.ask-hint { margin-top: 6px; font-size: 12.5px; color: var(--muted); min-height: 2.6em; }
-.ask-question { box-sizing: border-box; width: 100%; min-height: 96px; resize: vertical; font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
-.ask-question:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.ask-disclosure { margin-top: 10px; font-size: 13px; font-weight: 600; }
-.ask-result { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
-.ask-result[data-tone="bad"] { color: var(--danger); font-weight: 600; }
-.ask-result[data-tone="ok"] { color: #1a7f37; font-weight: 600; }
+.snip-result { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
+.snip-result[data-tone="bad"] { color: var(--danger); font-weight: 600; }
+.snip-result[data-tone="ok"] { color: #1a7f37; font-weight: 600; }
 
 /* A fingertip on iPad needs at least 44 pt. */
 .library button.text, .sheet button.text, .snip-actions button, .segmented button, .pages .row > button.open, .pages button.text,
