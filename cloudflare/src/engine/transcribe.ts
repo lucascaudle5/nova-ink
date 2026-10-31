@@ -18,6 +18,22 @@ Transcribe it so someone who cannot see it can follow the work exactly:
 - Write [illegible] for anything you cannot read. Do not solve, correct, or comment on the work.`
 
 export type Transcript = { text: string; model: string }
+/** Tokens a transcription used, when the model reports them, and the Workers AI neurons that comes to. */
+export type Usage = { tokensIn: number; tokensOut: number; neurons: number | null }
+
+/** Neurons per million tokens, from the Workers AI pricing page (October 2026). */
+const NEURONS: Record<string, [number, number]> = {
+  '@cf/meta/llama-4-scout-17b-16e-instruct': [24_545, 77_273],
+  '@cf/zai-org/glm-5.3-flash': [13_636, 45_455],
+}
+
+function usageOf(model: string, out: unknown): Usage | undefined {
+  const u = (out as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } })?.usage
+  const tokensIn = Number(u?.prompt_tokens), tokensOut = Number(u?.completion_tokens)
+  if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut)) return undefined
+  const rate = NEURONS[model]
+  return { tokensIn, tokensOut, neurons: rate ? Math.round((tokensIn * rate[0] + tokensOut * rate[1]) / 1e6) : null }
+}
 
 /** The text of a chat-style or a plain Workers AI response. */
 function replyText(out: unknown): string {
@@ -26,7 +42,7 @@ function replyText(out: unknown): string {
   return typeof text === 'string' ? text.trim() : ''
 }
 
-export async function transcribe(ai: VisionAi, picture: { data: string; mimeType: string }, timeoutMs = TRANSCRIBE_TIMEOUT_MS): Promise<Transcript | { error: string }> {
+export async function transcribe(ai: VisionAi, picture: { data: string; mimeType: string }, timeoutMs = TRANSCRIBE_TIMEOUT_MS): Promise<(Transcript & { usage?: Usage }) | { error: string }> {
   const messages = [{ role: 'user', content: [
     { type: 'text', text: PROMPT },
     { type: 'image_url', image_url: { url: `data:${picture.mimeType};base64,${picture.data}` } },
@@ -41,7 +57,7 @@ export async function transcribe(ai: VisionAi, picture: { data: string; mimeType
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), timeoutMs)),
       ])
       const text = replyText(out)
-      if (text) return { text, model }
+      if (text) { const usage = usageOf(model, out); return usage ? { text, model, usage } : { text, model } }
       last = `${model} returned no text`
     } catch (error) {
       last = `${model}: ${error instanceof Error ? error.message : String(error)}`

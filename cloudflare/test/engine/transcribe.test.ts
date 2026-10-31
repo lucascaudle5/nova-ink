@@ -17,6 +17,8 @@ describe('transcribing the picture for hosts without images', () => {
   it('falls back to the next model on an error or empty answer, reads chat-style replies, and reports when all fail', async () => {
     const fallback = await transcribe({ run: async model => { if (model === VISION_MODELS[0]) throw new Error('capacity'); return { choices: [{ message: { content: 'F = 196.2 N' } }] } } }, picture)
     expect(fallback).toEqual({ text: 'F = 196.2 N', model: VISION_MODELS[1] })
+    const counted = await transcribe({ run: async () => ({ response: 'x', usage: { prompt_tokens: 2000, completion_tokens: 300 } }) }, picture)
+    expect(counted).toEqual({ text: 'x', model: VISION_MODELS[0], usage: { tokensIn: 2000, tokensOut: 300, neurons: 72 } })
     expect(await transcribe({ run: async () => ({ response: '' }) }, picture)).toEqual({ error: `${VISION_MODELS[1]} returned no text` })
     expect(await transcribe({ run: () => new Promise(() => {}) }, picture, 20)).toEqual({ error: `${VISION_MODELS[1]}: timed out` })
   })

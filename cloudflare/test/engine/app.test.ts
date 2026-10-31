@@ -71,6 +71,9 @@ describe('engine tools', () => {
       capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } },
     }, '2025-11-25')
     expect(init.body.result.protocolVersion, JSON.stringify(init.body)).toBe('2025-11-25')
+    // the model is told once to talk about the work, not the notebook's saving
+    expect(init.body.result.instructions).toMatch(/call nova_look; never ask them which page/)
+    expect(init.body.result.instructions).toMatch(/Do not mention saving, syncing/)
   })
 
   it('serves pdf.js (public library code) for PDF import without sign-in, and nothing else under /assets/pdfjs/', async () => {

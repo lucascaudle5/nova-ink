@@ -23,6 +23,11 @@ export const ENGINE_UI_URI = 'ui://nova-ink-engine/notebook'
 const TOUCH_EVERY_MS = 60_000
 /** Base64 length of the stored view; kept under the 2 MB SQLite row limit. */
 export const MAX_VIEW_BASE64 = 1_500_000
+/** Told to the model for the whole connector. */
+export const INSTRUCTIONS = `NOVA Ink is the student's handwriting notebook. Talk about their work, not about the notebook.
+- To see their work and which page they are on, call nova_look; never ask them which page they are on.
+- The notebook saves, syncs and applies your drawings by itself. Do not mention saving, syncing, updating, revisions, request ids, queues, jobs or how long anything takes, and do not narrate your tool calls. Only bring it up if something failed and the student has to do something about it.
+- Keep answers short and conversational, especially in voice. Answer what the student asks; do not offer hints or draw on the page unless they ask.`
 const SEEN: Record<string, string> = {
   screen: 'exactly what is on the student\'s screen',
   area: 'the area of the page the student snipped to show you',
@@ -67,7 +72,7 @@ const lastTouch = new Map<string, number>()
 export function createEngineServer(ctx: ServerContext): McpServer {
   const env = ctx.env as EngineEnv
   // Hosts render the notebook only when the server declares MCP Apps here.
-  const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION }, { capabilities: { extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } } } })
+  const server = new McpServer({ name: 'NOVA Ink Notebook', version: ENGINE_VERSION }, { capabilities: { extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } } }, instructions: INSTRUCTIONS })
   const assetOrigin = (() => { try { return new URL(String(env.PUBLIC_ORIGIN)).origin } catch { return '' } })()
   const library = () => env.ENGINE_LIBRARY.get(env.ENGINE_LIBRARY.idFromName(`engine-library:${ctx.userId}`)) as any
   const page = (id: string) => env.PAGE.get(env.PAGE.idFromName(`page:${id}`)) as any
@@ -116,7 +121,7 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     inputSchema: z.object({}),
     _meta: { ui: { resourceUri: ENGINE_UI_URI } },
   }, async () => ({
-    content: [{ type: 'text', text: `Opening NOVA Ink notebook v${ENGINE_VERSION}. Saving is asynchronous; the notebook shows Saved only after the server confirms each change. To see the student's work and which page they are on, call nova_look (no arguments needed).` }],
+    content: [{ type: 'text', text: `Opening NOVA Ink notebook v${ENGINE_VERSION}. To see the student's work and which page they are on, call nova_look (no arguments needed). The notebook saves by itself; there is no need to mention it.` }],
     structuredContent: { application: 'nova-ink-engine', version: ENGINE_VERSION },
   }))
 
@@ -353,9 +358,13 @@ export function createEngineServer(ctx: ServerContext): McpServer {
       let transcript = shown.transcript
       let transcriptError: string | null = null
       if (!transcript) {
+        const started = Date.now()
         const made = env.AI ? await transcribe(env.AI, shown.picture) : { error: 'transcription is not set up on this server' }
-        if ('text' in made) { transcript = made; ctx.waitUntil(Promise.resolve(page(pageId).putTranscript({ at: shown.at, transcript: made })).catch(() => {})) }
-        else { transcriptError = made.error; console.log(JSON.stringify({ evt: 'transcribe-failed', error: made.error.slice(0, 200) })) }
+        if ('text' in made) {
+          console.log(JSON.stringify({ evt: 'transcribed', model: made.model, ms: Date.now() - started, ...made.usage }))
+          transcript = { text: made.text, model: made.model }
+          ctx.waitUntil(Promise.resolve(page(pageId).putTranscript({ at: shown.at, transcript })).catch(() => {}))
+        } else { transcriptError = made.error; console.log(JSON.stringify({ evt: 'transcribe-failed', error: made.error.slice(0, 200) })) }
       }
       return { ok: true, ...where, ...shown.view, transcript: transcript?.text ?? null, transcribedBy: transcript?.model ?? null, transcriptError, picture: shown.picture }
     }, d => {
@@ -394,7 +403,7 @@ Coordinates are page units; x grows right, y grows down. Prefer "place": { relat
 Operations (each an object with "op"):
 - draw { name?, place, shapes: [...] } shapes are drawn in a local frame starting near (0,0) and moved to "place": line {x1,y1,x2,y2,dashed?}, arrow {x1,y1,x2,y2,both?}, polyline {points:[[x,y],...],closed?}, rect {x,y,w,h}, ellipse {cx,cy,rx,ry}, arc {cx,cy,r,from,to,arrow?} (degrees), text {x,y,text,size?}, equation {x,y,text,size?} (math: ^ _ {} \\frac{a}{b} \\sqrt{x} \\Sigma \\theta ... and \\\\ for a new line). Optional color (#rrggbb), width, dashed on shapes. Use real geometry: free-body diagrams are arrows from the body outward with text labels, equations go beneath.
 - move { targets, dx?, dy? | place }, make_room { below: ref, amount }, align { targets, edge: left|right|top|bottom|centerX|centerY }, distribute { targets, axis: x|y, gap? }, group { targets, name? }, ungroup { targets }, duplicate { targets, place }, remove { targets } (only NOVA's own marks), picture { image, w, h, name?, place } (a stored picture id).
-Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Check nova_op_status to confirm "saved".`, z.object({
+Targets are ids from nova_read_page: a group id moves the whole group. After a draw, the result lists the new group ids to use in later requests. Pass expectedRevision from your last read to refuse the change if the page has changed since. The result says whether the change is "queued" (the notebook is open and will apply it within seconds), "applied" or "saved" (stored on the server). If the notebook is closed the change is saved directly. Do not tell the student about this status; use nova_op_status only if they say something is missing.`, z.object({
       pageId: uuid, requestId, expectedRevision: z.number().int().nonnegative().optional(),
       operations: z.array(z.record(z.string(), z.unknown())).min(1).max(40),
     }), 'mcp:write', async a => {
@@ -405,9 +414,9 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
       if (!queued.ok) return queued
       const { advanced: _advanced, ...rest } = queued
       return { ...rest, note: queued.status === 'saved' ? 'Saved on the server.' : queued.editorOpen
-        ? 'The notebook is open; it applies this within a few seconds and saves it. Check nova_op_status until it says "saved".'
+        ? 'The notebook shows this within seconds and saves it by itself; no need to check or mention it.'
         : 'Waiting for the notebook; it will be applied when the notebook next opens.' }
-    }, d => `Request ${d.status}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : ''}`)
+    }, d => `${d.status === 'saved' || d.editorOpen ? 'Done' : 'Will appear when the notebook next opens'}${(d.summary as string[] | undefined)?.length ? ': ' + (d.summary as string[]).join(' ') : '.'}`)
 
   modelTool('nova_op_status', 'Check NOVA Ink requests', 'Where your earlier requests stand: queued (accepted, waiting for the open notebook), applied (shown in the notebook, not yet saved), saved (stored on the server), or failed (with the reason). Pass pageId with requestIds for page edits, jobIds for source placements. A request left waiting while the notebook is closed is applied by this call.',
     z.object({ pageId: uuid.optional(), requestIds: z.array(requestId).max(50).optional(), jobIds: z.array(uuid).max(20).optional() }), 'mcp:read', async a => {
@@ -473,7 +482,7 @@ Targets are ids from nova_read_page: a group id moves the whole group. After a d
       const job = await library().createJob({ requestId: a.requestId, kind: 'place_source', params: {
         sourceId: a.sourceId, notebookId: a.notebookId, mode: a.mode, layout: a.layout, items, pageId: a.pageId, afterPageId: a.afterPageId ?? null, titlePrefix: a.titlePrefix,
       } }) as Data
-      return job.ok ? { ...job, note: 'The open notebook renders these and places them. Check nova_op_status with this jobId.' } : job
+      return job.ok ? { ...job, note: 'The open notebook renders these and places them. Check nova_op_status with this jobId before telling the student they are there; do not describe the job to them.' } : job
     }, d => `Placement ${d.status} (job ${d.jobId}).`)
 
   tool('nb_release', 'Release editing control after the last confirmed save', z.object({ pageId: uuid, clientId: uuid }), 'mcp:read', async a => {

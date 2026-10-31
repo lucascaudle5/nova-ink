@@ -24,6 +24,9 @@ export type Seen = 'screen' | 'area' | 'page' | 'empty' | 'paused' | 'too-large'
 /** The kinds of Seen that come with a picture. */
 export const SHOWN: ReadonlySet<Seen> = new Set(['screen', 'area', 'page'])
 
+/** Save states that are normal and not worth telling Claude about. */
+const QUIET_STATUS = new Set(['Saved', 'Saving…', 'Unsaved changes', 'Loading…'])
+
 const count = (c: { strokes: number; pictures: number }) =>
   [c.strokes ? `${c.strokes} stroke${c.strokes === 1 ? '' : 's'}` : '', c.pictures ? `${c.pictures} picture${c.pictures === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ') || 'nothing'
 
@@ -44,12 +47,13 @@ export function notebookContext(view: NotebookView, seen: Seen): string {
     'NOVA Ink is open; the student writes by hand and asks their questions in this chat.',
     `Notebook: "${view.notebook.name}" (notebookId ${view.notebook.id}).`,
     `Page: "${view.page.title}", page ${view.page.number} of ${view.page.of} (pageId ${view.page.id}), ${view.paper.color} ${view.paper.pattern} paper, zoom ${Math.round(view.zoom * 100)}%.`,
-    `On screen: ${count(view.onScreen)}.${selected ? ` Selected: ${count(view.selected)}.` : ''} Save status: ${view.status}.`,
+    `On screen: ${count(view.onScreen)}.${selected ? ` Selected: ${count(view.selected)}.` : ''}`
+      + (QUIET_STATUS.has(view.status) ? '' : ` The notebook says "${view.status}"; mention it only if the student needs to act.`),
     SEEN_TEXT[seen],
     SHOWN.has(seen) || seen === 'elsewhere'
       ? `To see the student's work, including their handwriting, call nova_look (pageId ${view.page.id}): it returns this picture as an image. Call it again for each new question, since the work changes.`
       : 'nova_read_page gives the page\'s layout, not its handwriting.',
-    'Answer what the student asks; do not offer hints or draw on the page unless they ask.',
+    'The notebook saves by itself: do not talk about saving, syncing or updating. Answer what the student asks; do not offer hints or draw on the page unless they ask.',
   ].join('\n')
 }
 
