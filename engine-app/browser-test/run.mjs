@@ -296,7 +296,7 @@ await test('Claude sees the screen: writing stores a picture of the screen for n
   await drawStroke(500, 'pen'); await sleep(2600)
   const last = (await json('window.novaContextLog')).at(-1)
   assert.ok(last && /exactly what is on their screen/.test(last.text), 'the latest note says it is the screen (' + (last?.text ?? '').slice(0, 160) + ')')
-  assert.ok(/call nova_read_page with pageId [0-9a-f-]{36}/.test(last.text), 'it tells Claude how to see the page')
+  assert.ok(/call nova_look \(pageId [0-9a-f-]{36}\)/.test(last.text), 'it tells Claude how to see the page')
   const view = await storedView()
   assert.ok(view && view.seen === 'screen' && view.mime === 'image/png' && view.length > 1000 && view.width > 100, 'the server holds a picture of the screen: ' + JSON.stringify(view))
   assert.ok(/Claude can see this screen/.test(await pill()), 'the status pill says what Claude can see')

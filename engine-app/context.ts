@@ -47,7 +47,7 @@ export function notebookContext(view: NotebookView, seen: Seen): string {
     `On screen: ${count(view.onScreen)}.${selected ? ` Selected: ${count(view.selected)}.` : ''} Save status: ${view.status}.`,
     SEEN_TEXT[seen],
     SHOWN.has(seen) || seen === 'elsewhere'
-      ? `To see the student's work, including their handwriting, call nova_read_page with pageId ${view.page.id}: its result includes this picture as an image. Call it again for each new question, since the work changes.`
+      ? `To see the student's work, including their handwriting, call nova_look (pageId ${view.page.id}): it returns this picture as an image. Call it again for each new question, since the work changes.`
       : 'nova_read_page gives the page\'s layout, not its handwriting.',
     'Answer what the student asks; do not offer hints or draw on the page unless they ask.',
   ].join('\n')

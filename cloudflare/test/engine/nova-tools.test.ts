@@ -46,9 +46,17 @@ describe('the picture the student shows Claude', () => {
     result = await call()
     expect(result.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
     expect(result.content[0].text.split('\n')[0]).toMatch(/The attached image is exactly what is on the student's screen, taken \d+ s ago\.$/)
-    expect(result.structuredContent.view).toMatchObject({ width: 1180, height: 820 })
-    expect(JSON.stringify(result.structuredContent)).not.toContain(data)
-    expect(result.content[0].text).not.toContain(data)
+    // with an image there is no structuredContent a host could show the model instead; the text carries the data
+    expect(result.structuredContent).toBeUndefined()
+    const text = result.content[0].text as string
+    expect(JSON.parse(text.slice(text.indexOf('\n') + 1))).toMatchObject({ ok: true, page: { id: pageId }, view: { width: 1180, height: 820 } })
+    expect(text).not.toContain(data)
+
+    // nova_look: just the picture, for the page open in the notebook when no pageId is given
+    const look = (await rpc(token, 'tools/call', { name: 'nova_look', arguments: {} })).body.result
+    expect(look.structuredContent).toBeUndefined()
+    expect(look.content[1]).toEqual({ type: 'image', data, mimeType: 'image/png' })
+    expect(look.content[0].text).toMatch(/^The student is on page 1 of 1, "Page 1", in notebook "Statics review \(test\)"\. The attached image is exactly what is on the student's screen, taken \d+ s ago\./)
 
     // another device holding the page cannot replace it
     const other = crypto.randomUUID()
@@ -59,6 +67,7 @@ describe('the picture the student shows Claude', () => {
 
     expect(await tool(token, 'nb_put_view', { pageId, clientId: client, view: null })).toMatchObject({ ok: true })
     expect((await call()).content).toHaveLength(1)
+    expect(await tool(token, 'nova_look', { pageId })).toMatchObject({ ok: true, pageId, shows: null })
     expect(await tool(token, 'nb_put_view', { pageId: crypto.randomUUID(), clientId: client, view: null })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
     const reader = (await signIn({ scopes: ['mcp:read'] }))!
     expect(await tool(reader, 'nb_put_view', { pageId, clientId: client, view: null })).toMatchObject({ ok: false, code: 'INSUFFICIENT_SCOPE' })
@@ -80,7 +89,11 @@ describe('NOVA reads and edits a page through the model tools', () => {
     // A host that hands the model only the text still gives it the ids it needs to draw.
     const { body } = await rpc(token, 'tools/call', { name: 'nova_read_page', arguments: { pageId } })
     const text = body.result.content[0].text as string
-    expect(text.split('\n')[0]).toMatch(/^Page at revision 1/)
+    expect(text.split('\n')[0]).toMatch(/^Page 1 of 1, "Page 1", in notebook "Statics review \(test\)", at revision 1/)
+    // the page the student has open is known without asking them
+    expect(listed.openPage).toMatchObject({ pageId, pageNumber: 1, pageCount: 1, notebook: 'Statics review (test)' })
+    expect(await tool(token, 'nova_read_page', {})).toMatchObject({ ok: true, page: { id: pageId, number: 1, of: 1 } })
+    expect(await tool(token, 'nova_look', {})).toMatchObject({ ok: true, pageId, title: 'Page 1', shows: null })
     expect(JSON.parse(text.slice(text.indexOf('\n') + 1))).toMatchObject({ ok: true, page: { id: pageId }, regions: [{ ref }] })
     const { body: appOnly } = await rpc(token, 'tools/call', { name: 'nb_list', arguments: {} })
     expect(appOnly.result.content[0].text).not.toContain('{')

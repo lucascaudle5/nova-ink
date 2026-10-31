@@ -51,6 +51,8 @@ function result(data: Data, say?: (data: Data) => string, picture?: Picture) {
   const text = data.ok ? (say ? say(data) : 'NOVA Ink notebook operation completed.') : `NOVA Ink notebook error: ${String(data.message ?? data.code)}`
   const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [{ type: 'text', text }]
   if (data.ok && picture) content.push({ type: 'image', ...picture })
+  // A host may hand the model structuredContent in place of content, which would drop the image; the text has the data.
+  if (data.ok && picture) return { content }
   return { structuredContent: data as Record<string, unknown>, content }
 }
 
@@ -108,7 +110,7 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     inputSchema: z.object({}),
     _meta: { ui: { resourceUri: ENGINE_UI_URI } },
   }, async () => ({
-    content: [{ type: 'text', text: `Opening NOVA Ink notebook v${ENGINE_VERSION}. Saving is asynchronous; the notebook shows Saved only after the server confirms each change.` }],
+    content: [{ type: 'text', text: `Opening NOVA Ink notebook v${ENGINE_VERSION}. Saving is asynchronous; the notebook shows Saved only after the server confirms each change. To see the student's work and which page they are on, call nova_look (no arguments needed).` }],
     structuredContent: { application: 'nova-ink-engine', version: ENGINE_VERSION },
   }))
 
@@ -302,28 +304,67 @@ export function createEngineServer(ctx: ServerContext): McpServer {
     }))
   }
 
-  modelTool('nova_list_notebooks', 'List NOVA Ink notebooks', 'List the notebooks and pages in the user\'s NOVA Ink notebook (ids and titles) and the source documents (PDFs) available to place into it. Does not read page contents.',
+  modelTool('nova_list_notebooks', 'List NOVA Ink notebooks', 'List the notebooks and pages in the user\'s NOVA Ink notebook (ids and titles) and the source documents (PDFs) available to place into it, and which page the student has open (openPage). Does not read page contents.',
     z.object({}), 'mcp:read', async () => {
-      const [notebooks, sources] = await Promise.all([live(), library().listSources() as Promise<Data>])
-      return { ok: true, notebooks, sources: sources.sources }
-    }, d => `${(d.notebooks as unknown[]).length} notebook(s), ${(d.sources as unknown[]).length} source document(s).`)
+      const [notebooks, sources, openId] = await Promise.all([live(), library().listSources() as Promise<Data>, openPageId()])
+      return { ok: true, openPage: openId ? await whereIs(openId) : null, notebooks, sources: sources.sources }
+    }, d => `${d.openPage ? `The student is on ${placeText(d.openPage as Data)}. ` : ''}${(d.notebooks as unknown[]).length} notebook(s), ${(d.sources as unknown[]).length} source document(s).`)
 
-  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. Also reports whether the notebook is open and how many of your requests are still waiting.',
-    z.object({ pageId: uuid }), 'mcp:read', async a => {
+  /** The page the student last opened in the notebook (the one on screen while it is open). */
+  async function openPageId(): Promise<string | undefined> {
+    return ((await library().list()) as Data).last?.pageId ?? undefined
+  }
+
+  /** Which notebook a page is in and its place there, for telling Claude where the student is. */
+  async function whereIs(pageId: string) {
+    const books = await live()
+    const book = books.find(b => b.pages.some(p => p.id === pageId))
+    const index = book ? book.pages.findIndex(p => p.id === pageId) : -1
+    return { pageId, title: book?.pages[index]?.title ?? null, pageNumber: index + 1 || null, pageCount: book?.pages.length ?? null, notebookId: book?.id ?? null, notebook: book?.name ?? null }
+  }
+  const placeText = (d: Data) => `page ${d.pageNumber ?? '?'} of ${d.pageCount ?? '?'}, "${d.title}", in notebook "${d.notebook}"`
+
+  /** The picture the editing notebook stored for Claude, described, and as image content. */
+  async function storedView(pageId: string) {
+    const shown = await page(pageId).view() as { seen: string; mime: string; data: string; width: number; height: number; at: string } | null
+    if (!shown) return null
+    return {
+      view: { shows: SEEN[shown.seen] ?? shown.seen, width: shown.width, height: shown.height, takenAt: shown.at, ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(shown.at)) / 1000)) },
+      picture: { data: shown.data, mimeType: shown.mime },
+    }
+  }
+
+  modelTool('nova_look', 'Look at the student\'s NOVA Ink screen', 'See what the student is showing you in NOVA Ink right now, as an image: their screen, or the area they snipped, handwriting included, with the notebook and page they are on. Call this whenever the student refers to their work ("look at this", "is this right?", "what did I do wrong?"), in text or voice conversation, and again for each new question, since the work changes. pageId is optional and usually left out: it defaults to the page the student has open, so do not ask them which page they are on.',
+    z.object({ pageId: uuid.optional() }), 'mcp:read', async a => {
+      const pageId = a.pageId ?? await openPageId()
+      if (!pageId) return notFound()
+      const own = await owned(pageId, false)
+      if ('error' in own) return own.error
+      const [shown, where] = await Promise.all([storedView(pageId), whereIs(pageId)])
+      return shown ? { ok: true, ...where, ...shown.view, picture: shown.picture } : { ok: true, ...where, shows: null }
+    }, d => d.shows
+      ? `The student is on ${placeText(d)}. The attached image is ${d.shows}, taken ${d.ageSeconds} s ago.`
+      : `The student is on ${placeText(d)}. No picture: the notebook is closed, paused, or showing an empty screen. Ask the student to open NOVA Ink or describe their work.`)
+
+  modelTool('nova_read_page', 'Read a NOVA Ink page', 'Describe what is on one page: its revision, groups (NOVA drawings carry a "N" tag and author "nova"), pictures with their size, position and where they came from (document, page number, crop), and regions of the student\'s handwriting. Every item has an id and bounds in page units (x right, y down, about 1 CSS pixel at 100% zoom). Use these ids in nova_edit_page. The student\'s handwriting is listed as regions (refs like "ink:..."), not as text. While the notebook is open and showing you the page, the result also includes an image of what the student is showing you (their screen, or an area they snipped): read their handwriting from that image. To just look at the work, use nova_look. Also reports whether the notebook is open and how many of your requests are still waiting. pageId is optional; it defaults to the page the student has open, so do not ask them which page they are on.',
+    z.object({ pageId: uuid.optional() }), 'mcp:read', async args => {
+      const pageId = args.pageId ?? await openPageId()
+      if (!pageId) return notFound()
+      const a = { pageId }
       const own = await owned(a.pageId, false)
       if ('error' in own) return own.error
-      const [scene, shown] = await Promise.all([page(a.pageId).scene() as Promise<Data>, page(a.pageId).view() as Promise<{ seen: string; mime: string; data: string; width: number; height: number; at: string } | null>])
+      const [scene, shown, where] = await Promise.all([page(a.pageId).scene() as Promise<Data>, storedView(a.pageId), whereIs(a.pageId)])
       if (!scene.ok) return scene
       if (scene.advanced) await touch(a.pageId, scene.advanced.revision, scene.advanced.savedAt, true)
       const metas = await library().imageMetas((scene.pictures as any[]).map(p => p.picture)) as Record<string, unknown>
       const { advanced: _advanced, ...rest } = scene
-      const view = shown ? { shows: SEEN[shown.seen] ?? shown.seen, width: shown.width, height: shown.height, takenAt: shown.at, ageSeconds: Math.max(0, Math.round((Date.now() - Date.parse(shown.at)) / 1000)) } : null
       return {
-        ...rest, page: { id: own.meta.id, title: own.meta.title, notebookId: own.meta.notebookId }, pictures: (scene.pictures as any[]).map(p => ({ ...p, source: metas[p.picture] ?? null })),
-        view, ...(shown ? { picture: { data: shown.data, mimeType: shown.mime } } : {}),
+        ...rest, page: { id: own.meta.id, title: own.meta.title, notebookId: own.meta.notebookId, number: where.pageNumber, of: where.pageCount, notebook: where.notebook }, pictures: (scene.pictures as any[]).map(p => ({ ...p, source: metas[p.picture] ?? null })),
+        view: shown?.view ?? null, ...(shown ? { picture: shown.picture } : {}),
       }
     }, d => {
-      const counts = `Page at revision ${d.revision}: ${(d.groups as unknown[]).length} group(s), ${(d.pictures as unknown[]).length} picture(s), ${(d.regions as unknown[]).length} handwriting region(s).`
+      const p = d.page as { number: number | null; of: number | null; title: string; notebook: string | null }
+      const counts = `Page ${p.number ?? '?'} of ${p.of ?? '?'}, "${p.title}", in notebook "${p.notebook}", at revision ${d.revision}: ${(d.groups as unknown[]).length} group(s), ${(d.pictures as unknown[]).length} picture(s), ${(d.regions as unknown[]).length} handwriting region(s).`
       const view = d.view as { shows: string; ageSeconds: number } | null
       return view ? `${counts} The attached image is ${view.shows}, taken ${view.ageSeconds} s ago.` : `${counts} No image: the notebook is closed, paused, or showing an empty screen.`
     })

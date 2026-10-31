@@ -35,11 +35,11 @@ test('the context says what the picture shows, or why there is none', () => {
   assert.match(notebookContext(view, 'elsewhere'), /Another of the student's devices/)
 })
 
-test('when there is a picture, Claude is told to fetch it with nova_read_page for this page', () => {
-  for (const seen of ['screen', 'area', 'page', 'elsewhere'] as const) assert.match(notebookContext(view, seen), /call nova_read_page with pageId pg-2: its result includes this picture as an image/)
+test('when there is a picture, Claude is told to fetch it with nova_look for this page', () => {
+  for (const seen of ['screen', 'area', 'page', 'elsewhere'] as const) assert.match(notebookContext(view, seen), /call nova_look \(pageId pg-2\): it returns this picture as an image/)
   for (const seen of ['empty', 'paused', 'too-large'] as const) {
     const text = notebookContext(view, seen)
-    assert.ok(!/call nova_read_page/.test(text), seen)
+    assert.ok(!/nova_look/.test(text), seen)
     assert.match(text, /layout, not its handwriting/)
   }
 })
