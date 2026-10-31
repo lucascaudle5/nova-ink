@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
-// The NOVA Ink notebook app for ChatGPT, built to one self-contained HTML file (dist/notebook.html).
+// The NOVA Ink notebook app for Claude, built to one self-contained HTML file (dist/notebook.html).
 // pdf.js stays out of that file (see pdf.ts); the dev server serves it straight from node_modules.
 export default defineConfig(({ command }) => ({
   root: __dirname,

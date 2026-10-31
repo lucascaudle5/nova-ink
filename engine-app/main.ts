@@ -906,7 +906,7 @@ async function sendAsk(question: string, scope: AskScope, say: (text: string, to
   const message = askMessage(input, png)
   if (!app) {
     askLog.push({ role: message.role, content: message.content.map(c => c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', mimeType: c.mimeType, bytes: c.data.length }) })
-    say('Preview: logged in window.novaAskLog; nothing was sent to Claude.', 'ok')
+    say('Preview: logged in window.novaAskLog; nothing was sent to NOVA.', 'ok')
     return true
   }
   const caps = app.getHostCapabilities()
@@ -968,7 +968,7 @@ function askSheet() {
     }))
   }
   paintScope()
-  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for Claude if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
+  const question = el('textarea', { className: 'ask-question', placeholder: 'Add a note for NOVA if you like (optional)', maxLength: MAX_QUESTION, ariaLabel: 'Note (optional)' })
   const result = el('div', { className: 'ask-result', ariaLive: 'polite' })
   const say = (text: string, tone?: 'ok' | 'bad') => { result.textContent = text; if (tone) result.dataset.tone = tone; else delete result.dataset.tone }
   const send = action('Send', async () => {
@@ -1028,7 +1028,7 @@ function renderSnipBar() {
 }
 
 $('snip-cancel').addEventListener('click', () => surface.endSnip())
-$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show Claude.', 'bad') })
+$('snip-whole').addEventListener('click', () => { if (!surface.snipWholePage()) snipSay('This page is empty, so there is nothing to show NOVA.', 'bad') })
 $('snip-send').addEventListener('click', async () => {
   const area = surface.snipArea
   if (!area || snipSending) return

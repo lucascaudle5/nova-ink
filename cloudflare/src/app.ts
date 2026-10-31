@@ -2,9 +2,9 @@
  * The Worker application: Cloudflare's OAuth provider in front, Access for SaaS (OIDC) as the identity step,
  * and the MCP endpoint behind it.
  *
- *   ChatGPT --(OAuth 2.1 + PKCE)--> /authorize (our consent page) --> Cloudflare Access login --> /callback
+ *   Claude --(OAuth 2.1 + PKCE)--> /authorize (our consent page) --> Cloudflare Access login --> /callback
  *   /callback: verify ID token (signature, issuer, audience, nonce, expiry) + ALLOWED_EMAIL --> issue our own code/tokens
- *   ChatGPT --(Bearer token)--> /mcp  (only reached with a valid token for this resource; scopes enforced per tool)
+ *   Claude --(Bearer token)--> /mcp  (only reached with a valid token for this resource; scopes enforced per tool)
  *
  * Fail closed: when configuration is incomplete every route except /health returns 503, and nothing is served.
  */

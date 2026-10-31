@@ -1,5 +1,5 @@
 /**
- * In-memory stand-in for the nb_* tools, for tests and for previewing the app outside ChatGPT. It follows
+ * In-memory stand-in for the nb_* tools, for tests and for previewing the app outside Claude. It follows
  * PageDO's order of save checks (replay, editing control, revision). Holds test data only, never saved anywhere.
  */
 import { isPaper } from '../engine/src/core/paper'

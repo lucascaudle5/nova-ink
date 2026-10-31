@@ -1,4 +1,4 @@
-/** Ask NOVA: what the student chooses, what Claude is told, and when nothing is sent. No DOM, no network. */
+/** Ask NOVA: what the student chooses, what NOVA is told, and when nothing is sent. No DOM, no network. */
 
 export type HelpLevel = 'nudge' | 'concept' | 'next' | 'check'
 
@@ -18,7 +18,7 @@ export const HELP_ORDER: readonly HelpLevel[] = ['nudge', 'concept', 'next', 'ch
 export type AskScope = 'screen' | 'selection' | 'area' | 'page'
 
 /** Shown in the sheet before sending. */
-export const ASK_DISCLOSURE = 'Claude sees only the picture you send: what is on screen, your selection, or the area you choose.'
+export const ASK_DISCLOSURE = 'NOVA sees only the picture you send: what is on screen, your selection, or the area you choose.'
 
 export const MAX_QUESTION = 1200
 /** Largest base64 image the message may carry. */
@@ -89,10 +89,10 @@ export function askText(input: AskInput): string {
 }
 
 const EMPTY_REFUSAL: Record<AskScope, string> = {
-  screen: 'There is no work on screen to show Claude. Pan to your work first.',
-  selection: 'Nothing is selected, so there is nothing to show Claude.',
+  screen: 'There is no work on screen to show NOVA. Pan to your work first.',
+  selection: 'Nothing is selected, so there is nothing to show NOVA.',
   area: 'There is no work inside that rectangle. Drag it over your work.',
-  page: 'This page is empty, so there is nothing to show Claude.',
+  page: 'This page is empty, so there is nothing to show NOVA.',
 }
 const LARGE_REFUSAL: Record<AskScope, string> = {
   screen: 'The picture of the screen is too large to send (over 3 MB). Zoom in on the part you want checked.',
